@@ -95,9 +95,18 @@ func (p Provider) DecidesModel(model string) bool {
 	if p.bailianApart() {
 		return model == BailianDecision
 	}
-	if p.IsRemoteMagpie() || p.listsDecisions() {
+	// decideListed's answer, without its list copied for each model
+	// asked about: a provider's every model was asked, a copy of the whole
+	// list each time (0.4 GB of a real config's 4 GB over 20 polls)
+	if p.IsRemoteMagpie() {
+		return slices.ContainsFunc(catalog.LiveByID(p.ID, model), func(m catalog.Model) bool { return m.Decides })
+	}
+	if p.listsDecisions() {
 		// OpenRouter's Jev Router (typesafe/jev-router) is a chat model
-		return slices.ContainsFunc(p.decideListed(), func(m catalog.Model) bool { return m.ID == model })
+		if id := decisionsID(p.ID); catalog.LiveListed(id) {
+			return len(catalog.LiveByID(id, model)) > 0
+		}
+		return !p.serverMarksDecisions() && model == OpenRouterJev
 	}
 	return jevID(model) || p.DecideVia() == ViaCloudflare && CloudflareClef(model)
 }
@@ -1020,7 +1029,7 @@ type listedFacts struct {
 func (f listedFacts) model(name string) catalog.Model {
 	m := catalog.Model{ID: name, Name: name, Context: cmp.Or(f.ContextLength, f.ContextWindow)}
 	if in := cmp.Or(len(f.Architecture.InputModalities), len(f.Modalities.Input)); in > 0 {
-		images := slices.Contains(f.Architecture.InputModalities, "image") || slices.Contains(f.Modalities.Input, "image")
+		images := slices.Contains(catalog.Kinds(f.Architecture.InputModalities), "image") || slices.Contains(catalog.Kinds(f.Modalities.Input), "image")
 		m.ImageInput, m.Images = &images, images
 	}
 	return m

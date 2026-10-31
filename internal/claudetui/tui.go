@@ -1,5 +1,3 @@
-//go:build darwin || linux
-
 // Package claudetui runs Claude Code's interactive mode for magpie's Claude
 // subscription bridge, as `magpie claude-tui-helper`: the bridge talks to
 // it as it talks to `claude -p --input-format stream-json --output-format
@@ -7,7 +5,9 @@
 // pseudo-terminal of its own. A user message is pasted into Claude Code's
 // prompt and sent with Enter, as a person does; what Claude Code answers is
 // read from the session's transcript, which Claude Code writes as it goes,
-// and told back as stream-json, one whole message at a time.
+// and told back as stream-json; a reply as Anthropic streams it, where
+// Claude Code loads the helper's tap (tap.go), and one whole message at a
+// time where it doesn't.
 //
 // Anthropic counts a request by its entrypoint: the interactive mode's
 // "cli", where -p's is "sdk-cli", and an sdk-cli request costs about
@@ -20,28 +20,36 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	"github.com/yetone/magpie/internal/proc"
-	"golang.org/x/sys/unix"
+	"github.com/yetone/magpie/internal/wslrun"
 )
+
+// ReadyWait is how long Claude Code may take to show its prompt before
+// the helper becomes -p (printMode). The bridge's wait for the helper's
+// answer to its initialize request is longer by as much as -p takes to
+// answer it (#4504): a wait shorter than this one ended the helper as it
+// waited, before it became -p, and the turn was answered 502.
+const ReadyWait = 45 * time.Second
 
 // how long Claude Code may take to show its prompt, a pasted message to
 // show in it, and a sent one to reach its transcript
 var (
-	readyWait = 45 * time.Second
+	readyWait = ReadyWait
 	pasteWait = 10 * time.Second
 	sentWait  = 3 * time.Second
 	// rows of one message are written together: a message is whole once
@@ -53,8 +61,10 @@ type shim struct {
 	outMu sync.Mutex
 	out   io.Writer
 
-	pty *os.File
-	cmd *exec.Cmd
+	// pty is Claude Code's terminal: what it draws is read from it, and
+	// what is typed written to it
+	pty io.ReadWriter
+	child
 	sid string
 	// projects is Claude Code's projects folder, where it keeps the
 	// session's transcript (<projects>/<folder>/<sid>.jsonl)
@@ -74,6 +84,20 @@ type shim struct {
 
 	exited chan struct{}
 	exit   error
+
+	// images is where a message's images are written for their paths to
+	// be pasted, made with the first; images counts them
+	images  string
+	nimages int
+
+	// wsl is a Claude Code in a WSL distro (WSLEnv); nil for this
+	// machine's
+	wsl *WSL
+
+	// tap copies the replies' streams (tap.go), nil with none; env is
+	// what Claude Code is given for it
+	tap *tap
+	env []string
 }
 
 // Run runs Claude Code at path, args being the bridge's `claude -p` ones,
@@ -86,12 +110,21 @@ func Run(args []string) error {
 		return errors.New("usage: magpie " + Command + " <claude> [claude -p's arguments]")
 	}
 	path, pargs := args[0], args[1:]
-	if since, ok := brokenSince(); ok {
+	var wsl *WSL
+	if v := os.Getenv(WSLEnv); v != "" {
+		wsl = &WSL{}
+		if err := json.Unmarshal([]byte(v), wsl); err != nil || len(wsl.Args) == 0 || wsl.Projects == "" {
+			return fmt.Errorf("%s: %q", WSLEnv, v)
+		}
+		// wsl.exe's own arguments, then Claude Code's
+		pargs = append(slices.Clone(wsl.Args), pargs...)
+	}
+	if since, ok := BrokenSince(); ok {
 		fmt.Fprintf(os.Stderr, "claude-tui: Claude Code's interactive mode failed to start %s ago; this run is -p\n", time.Since(since).Round(time.Second))
 		return printMode(path, pargs)
 	}
-	args = interactiveArgs(pargs)
-	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), exited: make(chan struct{})}
+	args = interactiveArgs(pargs[len(wslArgs(wsl)):])
+	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), exited: make(chan struct{}), wsl: wsl}
 	resume := ""
 	for i, a := range args {
 		if a == "--resume" && i+1 < len(args) {
@@ -105,6 +138,9 @@ func Run(args []string) error {
 		args = append(args, "--session-id", s.sid)
 	}
 	s.projects = filepath.Join(configDir(), "projects")
+	if wsl != nil {
+		s.projects = wsl.Projects
+	}
 	// a resumed session's file has its earlier turns: only what is
 	// written after the start is read
 	var from int64
@@ -113,31 +149,51 @@ func Run(args []string) error {
 			from = fi.Size()
 		}
 	}
-	if err := s.start(path, args); err != nil {
-		markBroken()
+	if s.tap, s.env = newTap(s.path); s.tap != nil {
+		s.tap.out, s.tap.sid = s, s.sid
+	}
+	defer s.tap.drop()
+	if err := s.start(path, append(slices.Clone(wslArgs(wsl)), args...)); err != nil {
+		s.tap.drop()
+		MarkBroken()
 		fmt.Fprintf(os.Stderr, "claude-tui: Claude Code's interactive mode could not start (%v); this run is -p\n", err)
 		return printMode(path, pargs)
 	}
 	defer s.stop()
+	defer s.dropImages()
+	go dropLeft()
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	signal.Notify(sigs, endSignals...)
 	go func() {
 		<-sigs
 		s.stop()
+		s.dropImages()
+		s.tap.drop()
 		os.Exit(1)
 	}()
 	if err := s.ready(); err != nil {
 		if !errors.Is(err, errUntrusted) {
-			markBroken()
+			MarkBroken()
 		}
 		signal.Reset()
 		s.stop()
+		s.tap.drop()
 		fmt.Fprintf(os.Stderr, "claude-tui: %v; this run is -p\n", err)
 		return printMode(path, pargs)
 	}
+	clearBroken()
 	s.emit(map[string]any{"type": "system", "subtype": "init", "session_id": s.sid})
 	go s.tail(from)
 	return s.input(os.Stdin)
+}
+
+// wslArgs is wsl.exe's arguments before Claude Code's, none for this
+// machine's Claude Code.
+func wslArgs(wsl *WSL) []string {
+	if wsl == nil {
+		return nil
+	}
+	return wsl.Args
 }
 
 // configDir is the folder Claude Code keeps its state in.
@@ -152,8 +208,9 @@ func configDir() string {
 // childEnv is the environment for Claude Code: the shim's, without what a
 // Claude Code above it marks its own children with (one started from a
 // Claude Code session keeps no transcript, "inherited
-// CLAUDE_CODE_CHILD_SESSION marker"), in a terminal it can draw in.
-func childEnv() []string {
+// CLAUDE_CODE_CHILD_SESSION marker"), in a terminal it can draw in, with
+// extra (the tap's) in place of the shim's own.
+func childEnv(extra ...string) []string {
 	var env []string
 	for _, e := range os.Environ() {
 		k, _, _ := strings.Cut(e, "=")
@@ -161,64 +218,25 @@ func childEnv() []string {
 		case k == "CLAUDECODE", k == "CLAUDE_CODE_ENTRYPOINT", k == "CLAUDE_CODE_CHILD_SESSION",
 			k == "CLAUDE_CODE_SESSION_ID", k == "CLAUDE_CODE_SESSION_ATTENDED", k == "CLAUDE_CODE_EXECPATH",
 			k == "CLAUDE_PID", k == "CLAUDE_EFFORT", k == "TERM", k == "COLUMNS", k == "LINES",
-			strings.HasPrefix(k, "CLAUDE_CODE_MESSAGING_"):
+			strings.HasPrefix(k, "CLAUDE_CODE_MESSAGING_"), k == WSLEnv:
+			continue
+		case slices.ContainsFunc(extra, func(x string) bool { return strings.HasPrefix(x, k+"=") }):
+			continue
+		case strings.EqualFold(k, "WSLENV") && os.Getenv(WSLEnv) != "":
+			// a Claude Code in WSL is given only what WSLENV names
 			continue
 		}
 		env = append(env, e)
 	}
-	return append(env, "TERM=xterm-256color")
-}
-
-func (s *shim) start(path string, args []string) error {
-	m, name, err := openPTY()
-	if err != nil {
-		return err
+	if os.Getenv(WSLEnv) != "" {
+		pass := os.Getenv("WSLENV") + ":TERM"
+		for _, x := range extra {
+			k, _, _ := strings.Cut(x, "=")
+			pass += ":" + k
+		}
+		env = append(env, "WSLENV="+strings.Trim(pass, ":"))
 	}
-	tty, err := os.OpenFile(name, os.O_RDWR|syscall.O_NOCTTY, 0)
-	if err != nil {
-		m.Close()
-		return err
-	}
-	// wide, so a line of Claude Code's screen is a line
-	_ = unix.IoctlSetWinsize(int(tty.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: 50, Col: 200})
-	cmd := proc.Command(path, args...)
-	cmd.Env = childEnv()
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
-	// its own session, the terminal its controlling one: the shim ending
-	// closes the terminal, and Claude Code is hung up on with it
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-	if err := cmd.Start(); err != nil {
-		m.Close()
-		tty.Close()
-		return err
-	}
-	tty.Close()
-	s.pty, s.cmd = m, cmd
-	go func() {
-		err := cmd.Wait()
-		s.exit = err
-		close(s.exited)
-	}()
-	go s.read()
-	return nil
-}
-
-// stop ends Claude Code: asked, then made to.
-func (s *shim) stop() {
-	if s.cmd == nil || s.cmd.Process == nil {
-		return
-	}
-	select {
-	case <-s.exited:
-		return
-	default:
-	}
-	_ = s.cmd.Process.Signal(syscall.SIGTERM)
-	select {
-	case <-s.exited:
-	case <-time.After(3 * time.Second):
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
-	}
+	return append(append(env, extra...), "TERM=xterm-256color")
 }
 
 // read keeps the tail of what Claude Code draws, and answers what it asks
@@ -230,10 +248,10 @@ func (s *shim) read() {
 		if n > 0 {
 			d := buf[:n]
 			if bytes.Contains(d, []byte("\x1b[6n")) {
-				_, _ = s.pty.Write([]byte("\x1b[1;1R"))
+				_, _ = io.WriteString(s.pty, "\x1b[1;1R")
 			}
 			if bytes.Contains(d, []byte("\x1b[c")) || bytes.Contains(d, []byte("\x1b[0c")) {
-				_, _ = s.pty.Write([]byte("\x1b[?62;c"))
+				_, _ = io.WriteString(s.pty, "\x1b[?62;c")
 			}
 			s.screenMu.Lock()
 			s.screen = append(s.screen, d...)
@@ -281,50 +299,86 @@ func (s *shim) lastScreen() string {
 var (
 	trustNo  = regexp.MustCompile(`❯\s*No,\s*exit`)
 	trustYes = regexp.MustCompile(`❯\s*Yes,\s*I trust`)
+	// how long a Yes stays drawn before Enter is pressed on it
+	trustSettle = 300 * time.Millisecond
 )
 
+// lastAt is where re's last match in p starts, -1 with none.
+func lastAt(re *regexp.Regexp, p string) int {
+	m := re.FindAllStringIndex(p, -1)
+	if len(m) == 0 {
+		return -1
+	}
+	return m[len(m)-1][0]
+}
+
 var errUntrusted = errors.New("Claude Code asks whether to trust the folder, which only its user answers")
+
+// signIn is what Claude Code's interactive mode shows where it is not
+// signed in, as -p may be (CLAUDE_CODE_OAUTH_TOKEN, a container whose
+// ~/.claude.json has no onboarding done): nothing the helper may answer.
+var signIn = regexp.MustCompile(`Select login method|Log in with your Claude account|claude\.ai/oauth/authorize`)
+
+// firstRun is the notes Claude Code's interactive mode shows where its
+// onboarding isn't done (a config folder only -p was run in, given
+// CLAUDE_CODE_OAUTH_TOKEN): agreeing to them is the user's, as is what
+// comes after them. It is matched in the screen's words, any space
+// between them one: Claude Code draws some by moving the cursor.
+var firstRun = regexp.MustCompile(`Security notes:.*Press Enter to continue`)
 
 // ready waits for Claude Code's prompt. Asked whether to trust the folder
 // it runs in, it is told yes, as a person would, when TrustEnv says so.
 func (s *shim) ready() error {
 	deadline := time.After(readyWait)
 	answered := 0
+	var yesAt, downAt time.Time
 	for {
 		p := s.plain()
 		switch {
 		case strings.Contains(p, "trust this folder") && os.Getenv(TrustEnv) != "1":
 			return errUntrusted
+		case signIn.MatchString(p):
+			return fmt.Errorf("Claude Code's interactive mode asks to sign in: %s", s.lastScreen())
+		case firstRun.MatchString(strings.Join(strings.Fields(p), " ")):
+			return fmt.Errorf("Claude Code's interactive mode shows its first-run notes, its onboarding not done: %s", s.lastScreen())
 		case strings.Contains(p, "trust this folder") && answered < 3:
-			keys := ""
+			// the choice is the last one drawn after ❯, "No, exit" at
+			// first. A key sent as the question is first drawn can be lost
+			// to its being drawn again on No, so Enter goes only to a Yes
+			// drawn trustSettle ago and not drawn over since.
+			no, yes := lastAt(trustNo, p), lastAt(trustYes, p)
 			switch {
-			case trustNo.MatchString(p):
-				keys = "\x1b[B"
-			case trustYes.MatchString(p):
-			default:
-				goto wait
+			case yes > no:
+				if yesAt.IsZero() {
+					yesAt = time.Now()
+				}
+				if time.Since(yesAt) < trustSettle {
+					break
+				}
+				answered++
+				yesAt = time.Time{}
+				s.clearScreen()
+				_, _ = io.WriteString(s.pty, "\r")
+			case no >= 0:
+				yesAt = time.Time{}
+				if time.Since(downAt) >= time.Second {
+					downAt = time.Now()
+					_, _ = io.WriteString(s.pty, "\x1b[B")
+				}
 			}
-			answered++
-			s.clearScreen()
-			if keys != "" {
-				_, _ = s.pty.WriteString(keys)
-				time.Sleep(300 * time.Millisecond)
-			}
-			_, _ = s.pty.WriteString("\r")
 		case strings.Contains(p, "keep browser tools off"):
 			// Claude in Chrome found: kept off, as the bridge runs it
 			// --no-chrome
 			s.clearScreen()
-			_, _ = s.pty.WriteString("\x1b")
+			_, _ = io.WriteString(s.pty, "\x1b")
 		case strings.Contains(p, "Choose the text style"):
 			s.clearScreen()
-			_, _ = s.pty.WriteString("\r")
+			_, _ = io.WriteString(s.pty, "\r")
 		case strings.Contains(p, "❯ "):
 			// drawn: a moment for its input to be listened to
 			time.Sleep(300 * time.Millisecond)
 			return nil
 		}
-	wait:
 		select {
 		case <-s.changed:
 		case <-time.After(200 * time.Millisecond):
@@ -372,13 +426,15 @@ func (s *shim) input(r io.Reader) error {
 			}
 			s.emit(map[string]any{"type": "control_response", "response": resp})
 		case "user":
-			text, ok := userText(m.Message.Content)
-			if !ok {
+			pieces, err := s.userPieces(m.Message.Content)
+			if err != nil {
 				s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
-					"result": "an image can't be pasted into Claude Code's interactive mode"})
+					"result": "this message can't be pasted into Claude Code's interactive mode: " + err.Error()})
 				continue
 			}
-			if err := s.send(text); err != nil {
+			err = s.send(pieces)
+			s.dropImages()
+			if err != nil {
 				return err
 			}
 			if m.UUID != "" {
@@ -389,34 +445,123 @@ func (s *shim) input(r io.Reader) error {
 	return sc.Err()
 }
 
-// userText is a user message's text, its blocks one after another; false
-// for one with anything but text.
-func userText(raw json.RawMessage) (string, bool) {
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s, true
+// piece is a part of a user message as it is pasted: words, or the path
+// of an image file, which Claude Code's prompt takes as that image
+// ("[Image #1]") when it is pasted alone.
+type piece struct{ text, image string }
+
+// imageTypes are the images Claude Code's prompt takes, by their file's
+// extension.
+var imageTypes = map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+
+// userPieces is a user message as it is pasted: its text blocks one after
+// another, an image block written to a file of its own.
+func (s *shim) userPieces(raw json.RawMessage) ([]piece, error) {
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return []piece{{text: str}}, nil
 	}
 	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type   string `json:"type"`
+		Text   string `json:"text"`
+		Source struct {
+			Type      string `json:"type"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		} `json:"source"`
 	}
-	if json.Unmarshal(raw, &blocks) != nil {
-		return "", false
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, err
 	}
+	var out []piece
 	var b strings.Builder
 	for _, bl := range blocks {
-		if bl.Type != "text" {
-			return "", false
+		switch bl.Type {
+		case "text":
+			if bl.Text == "" {
+				continue
+			}
+			if b.Len() > 0 || len(out) > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(bl.Text)
+		case "image":
+			path, err := s.writeImage(bl.Source.Type, bl.Source.MediaType, bl.Source.Data)
+			if err != nil {
+				return nil, err
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+				out = append(out, piece{text: b.String()})
+				b.Reset()
+			}
+			out = append(out, piece{image: path})
+		default:
+			return nil, fmt.Errorf("a %s block", bl.Type)
 		}
-		if bl.Text == "" {
-			continue
-		}
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(bl.Text)
 	}
-	return b.String(), true
+	if b.Len() > 0 || len(out) == 0 {
+		out = append(out, piece{text: b.String()})
+	}
+	return out, nil
+}
+
+// writeImage writes an image block's bytes to a file of its own, named
+// for its type, and returns its path.
+func (s *shim) writeImage(source, mediaType, data string) (string, error) {
+	if source != "base64" {
+		return "", fmt.Errorf("an image by %s", source)
+	}
+	b, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", fmt.Errorf("an image's data: %w", err)
+	}
+	if mediaType == "" {
+		mediaType = http.DetectContentType(b)
+	}
+	ext, ok := imageTypes[mediaType]
+	if !ok {
+		return "", fmt.Errorf("a %s image", mediaType)
+	}
+	if s.images == "" {
+		if s.images, err = os.MkdirTemp("", imagesPrefix+strconv.Itoa(os.Getpid())+"-"); err != nil {
+			return "", err
+		}
+	}
+	s.nimages++
+	path := filepath.Join(s.images, fmt.Sprintf("image-%d%s", s.nimages, ext))
+	return path, os.WriteFile(path, b, 0o600)
+}
+
+// dropImages removes the images pasted: once their message is in the
+// transcript, Claude Code has them, and when the helper ends.
+func (s *shim) dropImages() {
+	if s.images != "" {
+		_ = os.RemoveAll(s.images)
+		s.images = ""
+	}
+}
+
+// imagesPrefix names the folders images are written to, the helper's pid
+// after it.
+const imagesPrefix = "magpie-claude-images-"
+
+// imagesLeft is how long an image or tap folder is left before another
+// helper removes it: one killed, as Windows ends a run, can't remove its
+// own. A tap's files are open by then, in a run that goes on longer:
+// removed, they are read and written as before.
+const imagesLeft = time.Hour
+
+// dropLeft removes the image and tap folders helpers left, made over
+// imagesLeft ago.
+func dropLeft() {
+	m, _ := filepath.Glob(filepath.Join(os.TempDir(), imagesPrefix+"*"))
+	t, _ := filepath.Glob(filepath.Join(os.TempDir(), tapPrefix+"*"))
+	for _, d := range append(m, t...) {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() && time.Since(fi.ModTime()) > imagesLeft {
+			_ = os.RemoveAll(d)
+		}
+	}
 }
 
 // pasteable is text as a paste can carry it: no escape that would end the
@@ -425,18 +570,7 @@ func userText(raw json.RawMessage) (string, bool) {
 // shell line (!), a memory (#) or a background task (&). busy is for a
 // message sent while a turn is going, which Claude Code queues.
 func pasteable(text string, busy bool) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.Map(func(r rune) rune {
-		switch {
-		case r == '\r':
-			return '\n'
-		case r == '\n', r == '\t':
-			return r
-		case r < 0x20, r == 0x7f:
-			return -1
-		}
-		return r
-	}, text)
+	text = pasteClean(text)
 	// After a line break the prompt takes it as words: a space before it
 	// is trimmed, and a zero-width one taken out of the paste. Claude Code
 	// trims a queued message, though, and runs one opening with / as a
@@ -452,23 +586,127 @@ func pasteable(text string, busy bool) string {
 	return text
 }
 
-// send pastes text into Claude Code's prompt and presses Enter, again
-// while the message hasn't reached the transcript: an Enter that lands
-// while the paste is still being taken in is part of it.
-func (s *shim) send(text string) error {
+// pasteClean is text without an escape that would end a paste early, nor
+// other control characters, its lines ended by \n.
+func pasteClean(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\r':
+			return '\n'
+		case r == '\n', r == '\t':
+			return r
+		case r < 0x20, r == 0x7f:
+			return -1
+		}
+		return r
+	}, text)
+}
+
+// send pastes a message's pieces into Claude Code's prompt, each image
+// once the prompt shows the one before (its file is read as it is pasted,
+// and words pasted meanwhile would come before it), and presses Enter,
+// again while the message hasn't reached the transcript: an Enter that
+// lands while the paste is still being taken in is part of it.
+func (s *shim) send(pieces []piece) error {
 	s.rowsMu.Lock()
 	before, busy := s.rows, s.busy
 	s.rowsMu.Unlock()
-	text = pasteable(text, busy)
-	if strings.TrimSpace(text) == "" {
-		text = "."
+	text, image := "", 0
+	for i, p := range pieces {
+		if p.image != "" {
+			var err error
+			if image, err = s.pasteImage(s.path(p.image), image); err != nil {
+				return err
+			}
+			continue
+		}
+		if i == 0 {
+			p.text = pasteable(p.text, busy)
+		} else {
+			p.text = pasteClean(p.text)
+		}
+		if i == 0 && len(pieces) == 1 && strings.TrimSpace(p.text) == "" {
+			p.text = "."
+		}
+		s.clearScreen()
+		if _, err := io.WriteString(s.pty, "\x1b[200~"+p.text+"\x1b[201~"); err != nil {
+			return err
+		}
+		text = p.text
 	}
-	s.clearScreen()
-	if _, err := s.pty.WriteString("\x1b[200~" + text + "\x1b[201~"); err != nil {
+	if err := s.shown(text); err != nil {
 		return err
 	}
-	// shown in the prompt: its last words, or Claude Code's "[Pasted text"
-	// for a long one
+	time.Sleep(150 * time.Millisecond)
+	for try := 0; try < 4; try++ {
+		if _, err := io.WriteString(s.pty, "\r"); err != nil {
+			return err
+		}
+		by := time.After(sentWait)
+		for {
+			s.rowsMu.Lock()
+			sent := s.rows > before
+			s.rowsMu.Unlock()
+			if sent {
+				return nil
+			}
+			select {
+			case <-s.rowsCh:
+				continue
+			case <-by:
+			case <-s.exited:
+				return fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
+			}
+			break
+		}
+	}
+	return fmt.Errorf("Claude Code did not take the message: %s", s.lastScreen())
+}
+
+var imageShown = regexp.MustCompile(`\[Image #(\d+)\]`)
+
+// path is where Claude Code reads a file of the helper's at path: one in
+// WSL under the distro's mount of the drive.
+func (s *shim) path(path string) string {
+	if s.wsl == nil {
+		return path
+	}
+	return wslrun.Tool{Mount: s.wsl.Mount}.Linux(path)
+}
+
+// pasteImage pastes an image file's path, and waits for the prompt to show
+// it taken as an image: one numbered past after, the message's image
+// before it. It returns the number shown.
+func (s *shim) pasteImage(path string, after int) (int, error) {
+	s.clearScreen()
+	if _, err := io.WriteString(s.pty, "\x1b[200~"+path+"\x1b[201~"); err != nil {
+		return 0, err
+	}
+	by := time.After(pasteWait)
+	for {
+		for _, m := range imageShown.FindAllStringSubmatch(s.plain(), -1) {
+			if n, _ := strconv.Atoi(m[1]); n > after {
+				return n, nil
+			}
+		}
+		select {
+		case <-s.changed:
+		case <-time.After(100 * time.Millisecond):
+		case <-by:
+			return 0, fmt.Errorf("Claude Code did not take an image pasted as its path: %s", s.lastScreen())
+		case <-s.exited:
+			return 0, fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
+		}
+	}
+}
+
+// shown waits for the prompt to show pasted text: its last words, or
+// Claude Code's "[Pasted text" for a long one. Text "" waits for nothing.
+func (s *shim) shown(text string) error {
+	if text == "" {
+		return nil
+	}
 	tail := strings.TrimSpace(text)
 	if i := strings.LastIndexByte(tail, '\n'); i >= 0 {
 		tail = strings.TrimSpace(tail[i+1:])
@@ -492,30 +730,7 @@ shown:
 			return fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
 		}
 	}
-	time.Sleep(150 * time.Millisecond)
-	for try := 0; try < 4; try++ {
-		if _, err := s.pty.WriteString("\r"); err != nil {
-			return err
-		}
-		by := time.After(sentWait)
-		for {
-			s.rowsMu.Lock()
-			sent := s.rows > before
-			s.rowsMu.Unlock()
-			if sent {
-				return nil
-			}
-			select {
-			case <-s.rowsCh:
-				continue
-			case <-by:
-			case <-s.exited:
-				return fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
-			}
-			break
-		}
-	}
-	return fmt.Errorf("Claude Code did not take the message: %s", s.lastScreen())
+	return nil
 }
 
 // transcript is the session's transcript, "" before Claude Code writes it.
@@ -564,6 +779,7 @@ func (s *shim) tail(from int64) {
 		return
 	}
 	t := newTranslator(s)
+	t.tap = s.tap
 	rd := bufio.NewReaderSize(f, 1<<20)
 	var part []byte
 	for {
@@ -580,6 +796,11 @@ func (s *shim) tail(from int64) {
 			return
 		}
 		t.quiet()
+		s.tap.read()
+		wait := 50 * time.Millisecond
+		if s.tap != nil && s.tap.going(false) {
+			wait = tapPoll
+		}
 		select {
 		case <-s.exited:
 			// what it wrote last
@@ -587,8 +808,9 @@ func (s *shim) tail(from int64) {
 				t.row(append(part, line...))
 			}
 			t.flush()
+			s.tap.settle()
 			return
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(wait):
 		}
 	}
 }
@@ -636,15 +858,9 @@ func interactiveArgs(pargs []string) []string {
 	return append(out, "--permission-mode", "default", "--allowedTools", strings.Join(allowed, ","), "--no-chrome")
 }
 
-// printMode becomes Claude Code at path, run with the -p arguments pargs:
-// the same process, so the bridge's input, output and process tree go on
-// as they were.
-func printMode(path string, pargs []string) error {
-	return unix.Exec(path, append([]string{path}, pargs...), os.Environ())
-}
-
-// broken is where a failed start is kept: for brokenFor after it, runs go
-// straight to -p, rather than each waiting out readyWait.
+// broken is where a failed start is kept: for a while after it
+// (brokenFor), runs go straight to -p, rather than each waiting out
+// readyWait. It holds how many starts in a row failed.
 func broken() string {
 	dir, err := os.UserCacheDir()
 	if err != nil {
@@ -653,27 +869,66 @@ func broken() string {
 	return filepath.Join(dir, "magpie", "claude-tui-broken")
 }
 
-const brokenFor = 30 * time.Minute
-
-func brokenSince() (time.Time, bool) {
-	p := broken()
-	if p == "" {
-		return time.Time{}, false
+// brokenFor is how long runs go to -p after the interactive mode failed
+// to start n times in a row: 30 minutes, doubled with each failure after,
+// to a day. A machine where it never starts (a container whose Claude Code
+// is signed in for -p only, #4504) waits out readyWait about once a day.
+func brokenFor(n int) time.Duration {
+	d := 30 * time.Minute
+	for i := 1; i < n && d < 24*time.Hour; i++ {
+		d *= 2
 	}
-	fi, err := os.Stat(p)
-	if err != nil || time.Since(fi.ModTime()) > brokenFor {
-		return time.Time{}, false
-	}
-	return fi.ModTime(), true
+	return min(d, 24*time.Hour)
 }
 
-func markBroken() {
+func brokenRead() (time.Time, int, bool) {
+	p := broken()
+	if p == "" {
+		return time.Time{}, 0, false
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	b, _ := os.ReadFile(p)
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || n < 1 {
+		// a mark from before the count, or one half written
+		n = 1
+	}
+	return fi.ModTime(), n, true
+}
+
+// BrokenSince is when the interactive mode last failed to start, while
+// runs go to -p for it.
+func BrokenSince() (time.Time, bool) {
+	at, n, ok := brokenRead()
+	if !ok || time.Since(at) > brokenFor(n) {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
+// MarkBroken notes that the interactive mode failed to start: by the
+// helper, and by the bridge when the helper didn't answer in time.
+func MarkBroken() {
 	p := broken()
 	if p == "" {
 		return
 	}
+	n := 1
+	if _, was, ok := brokenRead(); ok {
+		n = was + 1
+	}
 	_ = os.MkdirAll(filepath.Dir(p), 0o700)
-	_ = os.WriteFile(p, nil, 0o600)
+	_ = os.WriteFile(p, []byte(strconv.Itoa(n)), 0o600)
 	now := time.Now()
 	_ = os.Chtimes(p, now, now)
+}
+
+// clearBroken forgets failed starts once one shows its prompt.
+func clearBroken() {
+	if p := broken(); p != "" {
+		_ = os.Remove(p)
+	}
 }
