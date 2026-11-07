@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 // Only the week's window being used up counts: the five hours pass on
 // their own, and a window whose end went by says nothing.
 func TestWeekUsedUp(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	now := time.Now()
 	later, gone := now.Add(48*time.Hour), now.Add(-time.Minute)
 	five := QuotaWindow{Span: 5 * time.Hour, Used: 100, ResetsAt: &later}
@@ -42,6 +44,7 @@ func TestWeekUsedUp(t *testing.T) {
 
 // The setting is kept by account, whatever its case, and turned off again.
 func TestSetCodexAutoReset(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	signIn(t)
 	if err := SetCodexAutoReset(" Me@Example.com ", true); err != nil {
 		t.Fatal(err)
@@ -66,6 +69,7 @@ func TestSetCodexAutoReset(t *testing.T) {
 // Kept to the one about to expire, a used-up week spends none, and kept
 // to the week, routing doesn't count on the one about to run out.
 func TestCodexAutoResetCases(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	signIn(t)
 	s := settings.Load()
 	s.CodexAutoReset = []string{"me@example.com"} // as written before the split
@@ -140,6 +144,7 @@ func TestCodexAutoResetCases(t *testing.T) {
 // A reset spent by itself is kept past a restart: none is spent again
 // until the week it was spent in ends.
 func TestAutoResetKeptPastRestart(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	signIn(t)
 	if err := SetCodexAutoReset("me@example.com", true); err != nil {
 		t.Fatal(err)
@@ -171,6 +176,7 @@ func TestAutoResetKeptPastRestart(t *testing.T) {
 // auto-use spend a second reset, and the write would take the evidence
 // with it. The use itself is still kept.
 func TestAutoResetUnreadableKeptAside(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	signIn(t)
 	if err := SetCodexAutoReset("me@example.com", true); err != nil {
 		t.Fatal(err)
@@ -219,15 +225,22 @@ func TestAutoResetUnreadableKeptAside(t *testing.T) {
 // fakeWeekUsedUp stands in for ChatGPT with an account whose week is used
 // up and that holds resets; it counts the resets spent.
 func fakeWeekUsedUp(t *testing.T) *atomic.Int32 {
+	return fakeWeekUsedUpAt(t, 72*time.Hour, nil)
+}
+
+func fakeWeekUsedUpAt(t *testing.T, ahead time.Duration, reads *atomic.Int32) *atomic.Int32 {
 	soon := time.Now().Add(20 * time.Minute).UTC().Format(time.RFC3339)
 	var consumed atomic.Int32
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/backend-api/wham/usage":
+			if reads != nil {
+				reads.Add(1)
+			}
 			json.NewEncoder(w).Encode(map[string]any{"plan_type": "pro",
 				"rate_limit": map[string]any{
 					"primary_window":   map[string]any{"used_percent": 10, "limit_window_seconds": 18000},
-					"secondary_window": map[string]any{"used_percent": 100, "limit_window_seconds": 604800, "reset_at": time.Now().Add(72 * time.Hour).Unix()},
+					"secondary_window": map[string]any{"used_percent": 100, "limit_window_seconds": 604800, "reset_at": time.Now().Add(ahead).Unix()},
 				},
 				"rate_limit_reset_credits": map[string]any{"available_count": 2}})
 		case "/backend-api/wham/rate-limit-reset-credits":
@@ -266,6 +279,7 @@ func unreadableAutoReset(t *testing.T) {
 // holds off a second one the same week, while one from a week ago, or one
 // used by hand, doesn't.
 func TestAutoResetUnreadableReadsResetsUsed(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	for name, c := range map[string]struct {
 		uses  []ResetUse
 		spent int32
@@ -300,6 +314,7 @@ func TestAutoResetUnreadableReadsResetsUsed(t *testing.T) {
 // When codex-resets-used.json can't be read either, no account spends a
 // reset by itself, past a restart too, until a week has gone by.
 func TestAutoResetNothingKnownSpendsNone(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	signIn(t)
 	if err := SetCodexAutoReset("me@example.com", true); err != nil {
 		t.Fatal(err)
@@ -327,5 +342,90 @@ func TestAutoResetNothingKnownSpendsNone(t *testing.T) {
 	autoReset.Unlock()
 	if d := time.Until(s.Until); d < 6*24*time.Hour || d > autoResetWeek {
 		t.Fatalf("held off until %v", s.Until)
+	}
+}
+
+func TestCodexWeekResetMinHours(t *testing.T) {
+	for _, c := range []struct {
+		raw   string
+		hours int
+		ok    bool
+	}{
+		{"", 0, true}, {"0", 0, true}, {"24", 24, true}, {" 24 ", 24, true}, {"168", 168, true}, {"169", 169, false}, {"-1", -1, false}, {"1.5", 0, false}, {"24h", 0, false}, {"abc", 0, false}, {"1e2", 0, false}, {"99999999999999999999999999999", 0, false},
+	} {
+		t.Run(c.raw, func(t *testing.T) {
+			t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", c.raw)
+			h, raw, ok := CodexWeekResetMinHours()
+			if raw != c.raw || ok != c.ok || (ok && h != c.hours) {
+				t.Fatalf("got %d %q %v", h, raw, ok)
+			}
+		})
+	}
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
+	os.Unsetenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS")
+	if h, _, ok := CodexWeekResetMinHours(); h != 0 || !ok {
+		t.Fatalf("unset: %d %v", h, ok)
+	}
+}
+
+func TestWeekResetFarEnough(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		ahead time.Duration
+		hours int
+		want  bool
+	}{
+		{24*time.Hour - time.Second, 24, false}, {24 * time.Hour, 24, true}, {24*time.Hour + time.Second, 24, true}, {time.Second, 0, true},
+	} {
+		if got := weekResetFarEnough(now.Add(c.ahead), now, c.hours); got != c.want {
+			t.Errorf("%s at %dh: %v", c.ahead, c.hours, got)
+		}
+	}
+}
+
+func TestAutoUseCodexResetHoursAhead(t *testing.T) {
+	for _, c := range []struct {
+		raw   string
+		want  int32
+		cause error
+	}{
+		{"73", 0, errWeekRenewsSoon}, {"71", 1, nil}, {"abc", 0, errMinHoursBad},
+	} {
+		t.Run(c.raw, func(t *testing.T) {
+			signIn(t)
+			t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", c.raw)
+			if err := SetCodexAutoReset("me@example.com", true); err != nil {
+				t.Fatal(err)
+			}
+			var reads atomic.Int32
+			consumed := fakeWeekUsedUpAt(t, 72*time.Hour, &reads)
+			out, err := AutoUseCodexReset(t.Context(), "me@example.com")
+			if !errors.Is(err, c.cause) || consumed.Load() != c.want || (c.want == 1 && out.Code != "reset") {
+				t.Fatalf("out %+v err %v spent %d", out, err, consumed.Load())
+			}
+			if c.raw == "abc" && reads.Load() != 0 {
+				t.Fatalf("invalid input read vendor %d times", reads.Load())
+			}
+			n := reads.Load()
+			if out, err := AutoUseCodexReset(t.Context(), "me@example.com"); err != nil || out.Code != "" {
+				t.Fatalf("second look: %+v %v", out, err)
+			}
+			if reads.Load() != n || consumed.Load() != c.want {
+				t.Fatalf("cooldown/once per week: reads %d -> %d, spent %d", n, reads.Load(), consumed.Load())
+			}
+		})
+	}
+}
+
+func TestAutoResetWordsMinHours(t *testing.T) {
+	signIn(t)
+	if err := SetCodexAutoReset("me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ raw, want string }{{"", "auto"}, {"0", "auto"}, {"24", "auto when the week runs out and refresh is at least 24h ahead, or before one expires"}, {"abc", "auto when the week runs out (paused: MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=\"abc\" is not whole hours from 0 to 168), or before one expires"}} {
+		t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", c.raw)
+		if got := AutoResetWords("me@example.com"); got != c.want {
+			t.Errorf("%q: %q", c.raw, got)
+		}
 	}
 }

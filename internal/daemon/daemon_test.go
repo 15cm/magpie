@@ -369,12 +369,16 @@ func TestPick(t *testing.T) {
 
 // The environment carried is the set variables of the list, once each.
 func TestEnviron(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "24")
 	t.Setenv("PATH", "/a:/b")
 	t.Setenv("no_proxy", "localhost")
 	t.Setenv("MAGPIE_ADDR", "")
 	got := strings.Join(environ(), "\n")
 	if !strings.Contains(got, "PATH=/a:/b") || !strings.Contains(got, "no_proxy=localhost") || strings.Contains(got, "MAGPIE_ADDR") {
 		t.Errorf("environ:\n%s", got)
+	}
+	if !strings.Contains(got, "MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=24") {
+		t.Errorf("threshold missing: %s", got)
 	}
 	if strings.Count(got, "PATH=/a:/b") != 1 {
 		t.Errorf("PATH twice:\n%s", got)

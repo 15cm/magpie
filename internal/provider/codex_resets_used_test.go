@@ -20,6 +20,7 @@ import (
 // why, and the account's reading carries them, newest first: one spent as
 // it was about to run out, one by hand, and one as the week was used up.
 func TestResetUsesKept(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
 	signIn(t)
 	rememberLogins(true) // the account kept, as the Usage page lists it
 	old, oldUntil := expiring.next, expiring.until

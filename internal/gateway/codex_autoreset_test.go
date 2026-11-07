@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +20,8 @@ import (
 // of their allowance: their usage (the week's and five hours'), the
 // resets each holds, and spending one, which lets the account answer again.
 type resetBackend struct {
+	until time.Time
+	reads int
 	mu    sync.Mutex
 	week  map[string]float64 // used, by account id; the five hours are full
 	held  map[string]int     // resets held
@@ -35,7 +39,8 @@ type resetBackend struct {
 
 func newResetBackend(t *testing.T, accounts ...string) *resetBackend {
 	t.Helper()
-	b := &resetBackend{week: map[string]float64{}, held: map[string]int{}, out: map[string]bool{},
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "")
+	b := &resetBackend{until: time.Now().Add(72 * time.Hour), week: map[string]float64{}, held: map[string]int{}, out: map[string]bool{},
 		credits: map[string]bool{}, edge: map[string]int{}, fails: map[string]int{}}
 	for _, a := range accounts {
 		b.week[a], b.held[a], b.out[a] = 100, 1, true
@@ -70,6 +75,7 @@ func newResetBackend(t *testing.T, accounts ...string) *resetBackend {
 				`data: {"type":"response.output_text.delta","delta":"pong"}`,
 				`data: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":7,"output_tokens":1}}}`))
 		case "/backend-api/wham/usage":
+			b.reads++
 			five := 100.0
 			if !b.out[acct] {
 				five = 0
@@ -77,7 +83,7 @@ func newResetBackend(t *testing.T, accounts ...string) *resetBackend {
 			json.NewEncoder(w).Encode(map[string]any{"plan_type": "plus",
 				"rate_limit": map[string]any{
 					"primary_window":   map[string]any{"used_percent": five, "limit_window_seconds": 18000, "reset_at": now.Add(2 * time.Hour).Unix()},
-					"secondary_window": map[string]any{"used_percent": b.week[acct], "limit_window_seconds": 604800, "reset_at": now.Add(3 * 24 * time.Hour).Unix()}},
+					"secondary_window": map[string]any{"used_percent": b.week[acct], "limit_window_seconds": 604800, "reset_at": b.until.Unix()}},
 				"rate_limit_reset_credits": map[string]any{"available_count": b.held[acct]},
 				"credits":                  map[string]any{"has_credits": b.credits[acct], "unlimited": false, "balance": map[bool]string{true: "120", false: "0"}[b.credits[acct]]}})
 		case "/backend-api/wham/rate-limit-reset-credits":
@@ -144,6 +150,10 @@ func resetsTraced(srv *Server) []string {
 func TestCodexAutoResetOneAccount(t *testing.T) {
 	codexSignedIn(t)
 	b := newResetBackend(t, "acct-1")
+	var logs bytes.Buffer
+	oldLog := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldLog) })
 	if err := provider.SetCodexAutoReset("Me@example.com", true); err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +168,9 @@ func TestCodexAutoResetOneAccount(t *testing.T) {
 	}
 	if calls := srv.Recent(); len(calls) == 0 || !strings.Contains(calls[0].Fallback, "used one of its resets") {
 		t.Fatalf("request log %+v", calls)
+	}
+	if !strings.Contains(logs.String(), "codex reset used for me@example.com, its week used up") {
+		t.Fatalf("log: %s", logs.String())
 	}
 	// out again in the same week: no second reset spent
 	b.mu.Lock()
@@ -229,6 +242,68 @@ func TestCodexAutoResetNot(t *testing.T) {
 			}
 			if got := resetsTraced(srv); len(got) != 0 {
 				t.Fatalf("traced %v", got)
+			}
+		})
+	}
+}
+
+func TestCodexAutoResetHoursAhead(t *testing.T) {
+	for _, c := range []struct {
+		name, raw  string
+		credits    bool
+		code       int
+		spent, log string
+	}{
+		{"below", "80", false, 429, "", "under the 80h asked"},
+		{"above", "60", false, 200, "acct-1", "its week used up"},
+		{"credits below", "80", true, 200, "", "under the 80h asked"},
+		{"credits above", "60", true, 200, "acct-1", "its week used up"},
+		{"invalid", "abc", false, 429, "", "MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=\"abc\""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			codexSignedIn(t)
+			b := newResetBackend(t, "acct-1")
+			t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", c.raw)
+			b.until = time.Now().Add(72 * time.Hour)
+			if c.credits {
+				b.credits["acct-1"] = true
+				creditsUsage(t, map[string]float64{"me@example.com": 100}, "me@example.com")
+			}
+			if err := provider.SetCodexAutoResetCase("me@example.com", provider.ResetCaseWeek, true); err != nil {
+				t.Fatal(err)
+			}
+			var logs bytes.Buffer
+			oldLog := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(oldLog) })
+			srv := New()
+			code, body := resetPost(t, srv)
+			if _, spent := b.seen(); code != c.code || spent != c.spent || (code == 200 && !strings.Contains(body, "pong")) {
+				t.Fatalf("status %d body %s spent %q want %q", code, body, spent, c.spent)
+			}
+			if !strings.Contains(logs.String(), c.log) {
+				t.Fatalf("log %q lacks %q", logs.String(), c.log)
+			}
+			b.mu.Lock()
+			n := b.reads
+			b.out["acct-1"], b.week["acct-1"], b.held["acct-1"] = true, 100, 1
+			b.mu.Unlock()
+			if c.raw == "abc" && n != 0 {
+				t.Fatalf("invalid value read usage %d times", n)
+			}
+			before := logs.String()
+			resetPost(t, srv)
+			b.mu.Lock()
+			reads := b.reads
+			b.mu.Unlock()
+			if reads != n {
+				t.Fatalf("cooldown/once per week made extra usage read: %d -> %d", n, reads)
+			}
+			if _, spent := b.seen(); spent != c.spent {
+				t.Fatalf("second request spent %q", spent)
+			}
+			if logs.String() != before {
+				t.Fatalf("second request logged a repeated decline: %s", logs.String())
 			}
 		})
 	}

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,13 +85,53 @@ func autoResetsExpiring(agent, user string) bool {
 func AutoResetWords(user string) string {
 	switch week, expiring := CodexAutoResetWhen(user); {
 	case week && expiring:
+		if words := WeekAheadWords(); words != "" {
+			return "auto when the week runs out" + words + ", or before one expires"
+		}
 		return "auto"
 	case week:
-		return "auto when the week runs out"
+		return "auto when the week runs out" + WeekAheadWords()
 	case expiring:
 		return "auto before one expires"
 	}
 	return ""
+}
+
+// CodexWeekResetMinHoursMost bounds MAGPIE_CODEX_WEEK_RESET_MIN_HOURS: a week.
+const CodexWeekResetMinHoursMost = 168
+
+// CodexWeekResetMinHours reads the minimum renewal distance for a weekly
+// reset. Unset or empty means zero; raw preserves invalid input for the cause.
+func CodexWeekResetMinHours() (hours int, raw string, ok bool) {
+	raw = os.Getenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS")
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, raw, true
+	}
+	hours, err := strconv.Atoi(value)
+	return hours, raw, err == nil && hours >= 0 && hours <= CodexWeekResetMinHoursMost
+}
+
+var (
+	errWeekRenewsSoon = errors.New("its week renews")
+	errMinHoursBad    = errors.New("weekly auto-reset paused")
+)
+
+// WeekAheadWords adds the renewal threshold or pause cause to weekly words.
+func WeekAheadWords() string {
+	hours, raw, ok := CodexWeekResetMinHours()
+	if !ok {
+		return fmt.Sprintf(" (paused: MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=%q is not whole hours from 0 to %d)", raw, CodexWeekResetMinHoursMost)
+	}
+	if hours == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" and refresh is at least %dh ahead", hours)
+}
+
+// weekResetFarEnough includes a renewal exactly hours ahead of now.
+func weekResetFarEnough(until, now time.Time, hours int) bool {
+	return until.Sub(now) >= time.Duration(hours)*time.Hour
 }
 
 // CodexSignedIn is the ChatGPT account Codex is signed in to now.
@@ -199,6 +240,10 @@ func AutoUseCodexReset(ctx context.Context, user string) (ResetOutcome, error) {
 	}
 	var who string
 	return autoReset.use(user, func(now time.Time) (*time.Time, bool, error) {
+		hours, raw, ok := CodexWeekResetMinHours()
+		if !ok {
+			return nil, false, fmt.Errorf("%w: MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=%q is not whole hours from 0 to %d", errMinHoursBad, raw, CodexWeekResetMinHoursMost)
+		}
 		var windows []QuotaWindow
 		var resets *ResetCredits
 		var err error
@@ -206,7 +251,11 @@ func AutoUseCodexReset(ctx context.Context, user string) (ResetOutcome, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		return weekUsedUp(windows, now), resets != nil && resets.Count > 0, nil
+		week := weekUsedUp(windows, now)
+		if week != nil && !weekResetFarEnough(*week, now, hours) {
+			return nil, false, fmt.Errorf("%w %s, under the %dh asked", errWeekRenewsSoon, week.Format(time.RFC3339), hours)
+		}
+		return week, resets != nil && resets.Count > 0, nil
 	}, func() (ResetOutcome, error) { return useCodexReset(ctx, who, ResetUsedWeek) })
 }
 
