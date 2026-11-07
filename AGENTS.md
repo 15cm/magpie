@@ -110,3 +110,15 @@ This magpie-side code still runs for moved subscriptions:
 
 The parity tests, `internal/gateway/plugin_*_test.go`, hold each plugin to
 what its built-in did.
+
+## Sandbox E2E
+
+E2E runs never touch a live magpie: not `https://magpie.sachi.m.mado.moe`,
+not `~/.config/magpie`, not a running gateway on :3425, not a real agent's
+config. Build the binary into the scratchpad. Run it with a fresh
+`HOME`/XDG set from `mktemp -d`, `MAGPIE_ADDR=127.0.0.1:<free port>` and
+the Go caches pinned. Remove the HOME afterwards. Never spend a real
+ChatGPT/Codex reset or point at a real account: the vendor is an
+`httptest` server, through the gateway's real server stack (`gateway.New`)
+in Go journey tests, and the GUI runs against its Playwright fake API.
+Record each step's command and output in the commit body.

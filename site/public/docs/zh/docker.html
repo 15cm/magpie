@@ -163,6 +163,7 @@ docker logs magpie</pre>
       <tr><td><code>MAGPIE_PUBLIC_URL</code></td><td>其他机器访问网关用的地址，例如 <code>http://192.168.1.20:3425</code>（宿主机或 NAS 的地址，加发布的端口），或反向代理的 base URL。容器里 magpie 只看得到 Docker 自己的 <code>172.17.x</code> 地址；设置后，它显示和打印的就是该用的地址。</td></tr>
       <tr><td><code>MAGPIE_WEB_KEY</code></td><td>Web 界面的 key，重启后不变（16 个字符以上）</td></tr>
       <tr><td><code>MAGPIE_TLS_CERT</code>、<code>MAGPIE_TLS_KEY</code></td><td>挂载进容器的 PEM 证书（后面跟着证书链）和私钥：其他机器只能用 <code>https://</code> 访问网关和 Web 界面，它们发来的明文 HTTP 返回 400。文件变了会重新读取，续期不用重启。只给一个，或文件读不出来，magpie 不会启动。<code>MAGPIE_PUBLIC_URL</code> 也写成 <code>https://</code>。</td></tr>
+      <tr><td><code>MAGPIE_CODEX_WEEK_RESET_MIN_HOURS</code></td><td>Codex 周额度用尽后，距续期至少还剩多少整小时才允许每周自动重置消耗重置次数：<code>0</code> 到 <code>168</code>，包含两端，忽略首尾空白。例如 <code>24</code> 表示距续期至少还有 24 小时（恰好 24 小时也满足）。未设置或为空时为 <code>0</code>，保持现有行为。无效值会暂停每周触发，且不读取厂商的额度窗口；独立的到期前触发仍照常运行。在提供网关服务的进程环境中设置，修改后重新创建容器。GUI 会显示该值，但不会将其保存为设置。</td></tr>
       <tr><td><code>MAGPIE_ALLOW_IPS</code></td><td>其他机器只能从这些地址访问网关和 Web 界面，写 IP 或 CIDR 网段：<code>203.0.113.7,10.0.0.0/8,2001:db8::/32</code>。其他地址即使带着网关密钥也会得到 403。不设置则所有地址都可访问，各自仍需密钥。见<a href="#allow">允许的地址</a>。</td></tr>
       <tr><td><code>HOME</code>、<code>XDG_CONFIG_HOME</code>、<code>XDG_CACHE_HOME</code>、<code>XDG_DATA_HOME</code>、<code>XDG_STATE_HOME</code></td><td>镜像已设为上面 <code>/config</code> 下的目录，不要改</td></tr>
     </table></div>

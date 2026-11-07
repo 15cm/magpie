@@ -2464,11 +2464,28 @@ reading of its windows, refreshed about every minute, shows one used up,
 the gateway holds it as used up till the window renews, and requests go to
 the other accounts, groups and fallbacks; with none left, the request gets a
 429 saying why, unless the account spends its resets by itself and its week
-is used up, when a reset is spent first. `magpie quota credits` lists the
-accounts set not to spend them, `magpie quota credits <account>` says one's.
+is used up and meets the weekly auto-reset rule below, when a reset is spent
+first. `magpie quota credits` lists the accounts set not to spend them,
+`magpie quota credits <account>` says one's.
 It changes the gateway's routing only, never the account Codex is signed in
 to. The credits an account holds show beside its windows in `magpie quota`,
 `magpie accounts`, the Usage page and the menu bar panel.
+
+For an account with *when its week runs out* on,
+`MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=24` lets the weekly trigger spend a reset
+only when the used-up week's renewal is at least 24 hours away, including
+exactly 24 hours. Set whole hours from `0` to `168`; surrounding whitespace
+is trimmed. Unset or empty means `0`, preserving today's behavior. An invalid
+value (for example `-1`, `169`, `1.5` or `24h`) pauses the weekly trigger
+before it reads the vendor's windows; the GUI and CLI say it is paused.
+The separate *before one expires* trigger keeps running. This changes only
+the weekly reset spend decision, with at most one reset per week; routing,
+caps and Smart/Weekly pace still classify a used-up week as before. If the
+weekly trigger declines, requests continue to credits, another account or
+the existing 429 as applicable. See the [gateway routing reference](subsystems/gateway-routing.md)
+for the implementation. Set the variable in the environment of the process
+serving the gateway and restart that process after changing it. The GUI
+shows the effective value; it does not save this as a setting.
 
 An account can have a name of your own, for telling apart seats the vendor
 names alike (a team's GLM seats under masked emails): click the account's
@@ -2777,8 +2794,9 @@ port is free.
 
 The service gets the environment `magpie daemon install` ran in: `PATH`
 (where it finds the agents' CLIs and bun), the proxy variables, `MAGPIE_*`
-settings such as `MAGPIE_ADDR` (and the `--tls-cert`/`--tls-key` pair, as
-`MAGPIE_TLS_CERT` and `MAGPIE_TLS_KEY`), the XDG folders and the agents' own folder
+settings such as `MAGPIE_ADDR` and `MAGPIE_CODEX_WEEK_RESET_MIN_HOURS` (and
+the `--tls-cert`/`--tls-key` pair, as `MAGPIE_TLS_CERT` and `MAGPIE_TLS_KEY`),
+the XDG folders and the agents' own folder
 variables (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`…). To that `PATH` it adds
 what a terminal of yours has and the shell may not: nvm's default Node
 (not its newest), the other version managers' and npm's folders, and your
