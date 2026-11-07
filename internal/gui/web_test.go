@@ -96,6 +96,19 @@ func TestWebNoAuthGuardBypass(t *testing.T) {
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("no-auth request: %d", rec.Code)
 	}
+	for _, site := range []string{"same-origin", "same-site", "cross-site"} {
+		r := httptest.NewRequest("POST", "/api/library/servers/save", nil)
+		r.Header.Set("Sec-Fetch-Site", site)
+		rec := httptest.NewRecorder()
+		webHandler("3430", "", 0, next).ServeHTTP(rec, r)
+		want := http.StatusForbidden
+		if site == "same-origin" {
+			want = http.StatusTeapot
+		}
+		if rec.Code != want {
+			t.Errorf("no-auth API from %s: %d, want %d", site, rec.Code, want)
+		}
+	}
 }
 
 func TestWebGuardBookmark(t *testing.T) {

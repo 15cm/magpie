@@ -88,7 +88,7 @@ func (j *jsonRetrieval) forModel(model string) ([]byte, string, error) {
 // provider, or over a group's members, and passes the answer back.
 func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, operation string, start time.Time, asked string, req retrieval) {
 	who := callerOf(r)
-	call := Call{Time: start, From: provider.Chat, Agent: who.agent, Via: who.via, Model: asked}
+	call := Call{Time: start, From: provider.Chat, Agent: who.agent, Via: who.via, Model: asked, headers: headerLogOf(r.Context())}
 	usage.Saw(agentOf(r))
 	// a model the user disabled (#1867), or a group of them all
 	if msg, off := idOff(asked); off {
@@ -97,8 +97,9 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		s.record(call)
 		return
 	}
-	p, model, ok := resolveRetrievalModel(asked)
-	if _, _, isGroup := provider.FindGroup(asked); ok && !isGroup {
+	kind := retrievalKind(operation)
+	p, model, ok := resolveRetrievalModel(asked, kind)
+	if _, _, isGroup := mediaMembers(asked, kind); ok && !isGroup {
 		if msg, off := modelOff(p, model, asked); off {
 			call.Status, call.Error = 403, msg
 			writeError(w, provider.Chat, 403, msg)
@@ -116,11 +117,15 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 		s.record(call)
 		return
 	}
-	g, ms, isGroup := provider.FindGroup(asked)
-	if keyWho, held := keyHolds(r); held && (isGroup && !groupAllowed(keyWho, g, ms) || !isGroup && !modelAllowed(keyWho, p, model)) {
-		msg := keyModelError(keyWho, asked)
-		call.Status, call.Error = 403, msg
-		writeError(w, provider.Chat, 403, msg)
+	g, ms, isGroup := mediaMembers(asked, kind)
+	if isGroup {
+		r = heldByGroup(r, g) // held to the group's accounts, if it is
+	}
+	keyWho, keyHeld := keyHolds(r)
+	if keyHeld && (isGroup && !groupAllowed(keyWho, g, ms) || !isGroup && !modelAllowed(keyWho, p, model)) {
+		st, msg := keyModelRefusal(w, keyWho, asked)
+		call.Status, call.Error = st, msg
+		writeError(w, provider.Chat, st, msg)
 		s.record(call)
 		return
 	}
@@ -144,8 +149,16 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 	// (429) or one whose vendor fails; a model is asked on its own
 	tries := []candidate{{p: p, model: model}}
 	if isGroup {
-		if cs, _ := s.planGroup(g.Live(), ms, provider.Chat); len(cs) > 0 {
+		cs, pl := s.planGroup(g.Live(), ms, provider.Chat)
+		if len(cs) > 0 {
 			tries = cs
+		} else if slices.ContainsFunc(pl.left, func(w Weighed) bool { return w.HeldBy != "" }) {
+			// every account a group in it may use is none it has
+			msg := groupsHeldError(asked, pl.left)
+			call.Status, call.Error = 403, msg
+			writeError(w, provider.Chat, 403, msg)
+			s.record(call)
+			return
 		}
 	} else {
 		// a model of one provider goes over its keys or accounts as a
@@ -159,6 +172,19 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 			return
 		}
 		tries = cs
+	}
+	// a group's members the key may not go to through it are left out
+	// (groupKeeps): those a spent limit of the key's counts
+	if keyHeld && isGroup {
+		keeps := groupKeeps(keyWho, g, ms)
+		tries = slices.DeleteFunc(tries, func(c candidate) bool { return !keeps[c.p.ID+"/"+c.model] })
+		if len(tries) == 0 {
+			st, msg := keyGroupRefusal(w, keyWho, asked, ms)
+			call.Status, call.Error = st, msg
+			writeError(w, provider.Chat, st, msg)
+			s.record(call)
+			return
+		}
 	}
 	// the accounts or keys the calling key may not use are left out of
 	// the tries too (#905): a group's members through it no less
@@ -308,10 +334,14 @@ func (s *Server) serveRetrieval(w http.ResponseWriter, r *http.Request, path, op
 	}
 }
 
-// resolveRetrievalModel also finds a preset plan's embedding model by its
-// bare id. Such models stay out of agents' chat-model lists, so the general
-// resolver does not otherwise see them there.
-func resolveRetrievalModel(id string) (provider.Provider, string, bool) {
+// resolveRetrievalModel also finds a preset plan's embedding or rerank
+// model, of kind's, by its bare id. Such models stay out of agents'
+// chat-model lists, so the general resolver does not otherwise see them
+// there.
+func resolveRetrievalModel(id, kind string) (provider.Provider, string, bool) {
+	if p, model, ok := mediaGroupFirst(id, kind); ok {
+		return p, model, true
+	}
 	if p, model, ok := provider.Resolve(id); ok {
 		return p, model, true
 	}
@@ -322,7 +352,7 @@ func resolveRetrievalModel(id string) (provider.Provider, string, bool) {
 		if !p.On() || p.DecideOnly() {
 			continue
 		}
-		for _, m := range p.PlanEmbeddings() {
+		for _, m := range p.PlanRetrieval(kind) {
 			if m.ID == id {
 				return p, id, true
 			}

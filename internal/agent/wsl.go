@@ -66,6 +66,9 @@ type place struct {
 	// chmod takes the group's and others' bits off a file under home, where
 	// magpie's own mode doesn't hold (a distro's: see ownerOnly); nil: here
 	chmod func(string) error
+	// dir is the agent's config folder when magpie keeps one of its own
+	// for it (claude-magpie's launch file, claude_launch.go); "": its own
+	dir string
 }
 
 func here(home string) place { return place{home: home} }
@@ -117,6 +120,9 @@ func (p place) codexHome() string {
 // this machine (appdir.ClaudeDir), ~/.claude in a distro, whose variables
 // magpie can't read.
 func (p place) claudeDir() string {
+	if p.dir != "" {
+		return p.dir
+	}
 	if p.spell != nil {
 		return p.join(".claude")
 	}
@@ -441,9 +447,9 @@ var wslKinds = []wslKind{
 					// over several accounts magpie routes, so they are
 					// offered via magpie too, as on a live Codex (#1603)
 					if codexFailover() {
-						return append(group("OpenAI", options(ownCodex(), "")), viaMagpie("codex", "")...)
+						return withVia(group("OpenAI", codexNamed(ownCodex())), "codex", "")
 					}
-					own := codexInMagpie(group("OpenAI", options(ownCodex(), "")))
+					own := codexInMagpie(group("OpenAI", codexNamed(ownCodex())))
 					return append(own, codexViaMagpieFor(own)...)
 				}
 			case "effort":
@@ -471,7 +477,7 @@ var wslKinds = []wslKind{
 			if key == "model" {
 				// the providers of its auth.json are the distro's files
 				return func(cur map[string]string) []Option {
-					return append(ownOptions("", cur["model"]), viaMagpie("pi", magpieID+"/")...)
+					return withVia(ownOptions("", cur["model"]), "pi", magpieID+"/")
 				}
 			}
 			return nil
@@ -482,7 +488,7 @@ var wslKinds = []wslKind{
 		asleep: func(key string) func(map[string]string) []Option {
 			if key == "model" {
 				return func(cur map[string]string) []Option {
-					return append(ownOptions("", cur["model"]), viaMagpie("omo", magpieID+"/")...)
+					return withVia(ownOptions("", cur["model"]), "omo", magpieID+"/")
 				}
 			}
 			return nil
@@ -493,7 +499,7 @@ var wslKinds = []wslKind{
 		asleep: func(key string) func(map[string]string) []Option {
 			if key == "model" {
 				return func(cur map[string]string) []Option {
-					return append(ownOptions("", cur["model"]), viaMagpie("prime-agent", magpieID+"/")...)
+					return withVia(ownOptions("", cur["model"]), "prime-agent", magpieID+"/")
 				}
 			}
 			return nil
@@ -508,10 +514,11 @@ var wslKinds = []wslKind{
 			case "model":
 				// whether it has a base URL of its own is the distro's file
 				return func(cur map[string]string) []Option {
-					return append(group("Claude Code", claudeOwn(cur["model"], nil, catalog.Provider("anthropic"))), claudeViaMagpie(false)...)
+					return joinedVia(group("Claude Code", claudeOwn(cur["model"], nil, catalog.Provider("anthropic"))), claudeViaShared(false), [2]string{"\x00claude-via", "\x00asleep"})
 				}
-			case "effort", "ultracode":
-				// their own options read only what was last seen
+			case "effort", "ultracode", "statusline":
+				// their own options read only what was last seen; magpie's
+				// status line isn't offered in a distro
 				return nil
 			case "login":
 				// its sign-in, while the model last seen is magpie's
@@ -560,7 +567,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(kimiOwnOptions("", cur["model"]), viaMagpie("kimi", magpieID+"/")...)
+				return withVia(kimiOwnOptions("", cur["model"]), "kimi", magpieID+"/")
 			}
 		}},
 	// Qwen Code's ~/.qwen, one settings.json of the same shape as this
@@ -572,7 +579,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(qwenOwnOptions("", cur["model"]), viaMagpie("qwen", magpieID+"/")...)
+				return withVia(qwenOwnOptions("", cur["model"]), "qwen", magpieID+"/")
 			}
 		}},
 	{id: "omp", name: "omp", dir: ".omp", bin: "omp", in: ompIn, version: true,
@@ -582,7 +589,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(ompOwnOptions("", cur[key]), viaMagpie("omp", magpieID+"/")...)
+				return withVia(ompOwnOptions("", cur[key]), "omp", magpieID+"/")
 			}
 		}},
 	{id: "crush", name: "Crush", dir: ".config/crush", bin: "crush", in: crushIn,
@@ -620,7 +627,7 @@ var wslKinds = []wslKind{
 				if c := cur["model"]; c != "" && !usesMagpie(c) {
 					own = append(own, Option{Value: c, Icon: modelIcon("", c)})
 				}
-				return append(group("Droid", own), viaMagpie("droid", magpieID+"/")...)
+				return withVia(group("Droid", own), "droid", magpieID+"/")
 			}
 		}},
 	// no bin: fx is also the JSON viewer's name
@@ -635,7 +642,7 @@ var wslKinds = []wslKind{
 				return nil
 			}
 			return func(cur map[string]string) []Option {
-				return append(miniMaxOwnOptions("", cur["model"]), viaMagpie("minimax-code", magpieID+"/")...)
+				return withVia(miniMaxOwnOptions("", cur["model"]), "minimax-code", magpieID+"/")
 			}
 		}},
 	// version: a dsh with no profile yet is told from one before profiles
@@ -651,7 +658,7 @@ var wslKinds = []wslKind{
 					for i := range own {
 						own[i].Direct = "DeepSeek"
 					}
-					return append(own, viaMagpie("dsh", magpieID+"/")...)
+					return withVia(own, "dsh", magpieID+"/")
 				}
 			}
 			if key != "effort" {
@@ -659,7 +666,7 @@ var wslKinds = []wslKind{
 			}
 			return func(cur map[string]string) []Option {
 				if ref, ok := strings.CutPrefix(cur["model"], magpieID+"/"); ok {
-					return static(dshLevels(ref)...)
+					return static(dshLevels("dsh", ref)...)
 				}
 				return static(dshEfforts...)
 			}
@@ -692,7 +699,7 @@ var wslKinds = []wslKind{
 			}
 			// the models of its config.toml are the distro's files
 			return func(cur map[string]string) []Option {
-				return append(atomcodeOwnModels("", cur["model"]), viaMagpie("atomcode", magpieID+"/")...)
+				return withVia(atomcodeOwnModels("", cur["model"]), "atomcode", magpieID+"/")
 			}
 		}},
 	// Snow CLI's ~/.snow, its profiles the distro's own; a stopped
@@ -737,7 +744,7 @@ var wslKinds = []wslKind{
 				if c := cur["model"]; c != "" && !usesMagpie(c) {
 					own = append(own, Option{Value: c, Icon: modelIcon("", c), Direct: "Google"})
 				}
-				return append(group("Antigravity CLI", own), viaMagpie("agy", magpieID+"/")...)
+				return withVia(group("Antigravity CLI", own), "agy", magpieID+"/")
 			}
 		}},
 	// Block's goose, by its folder alone: a goose command may be pressly's
@@ -766,7 +773,7 @@ var wslKinds = []wslKind{
 			switch key {
 			case "model", "planner":
 				return func(cur map[string]string) []Option {
-					out := append(ownOptions("", cur[key]), viaMagpie("reasonix", magpieID+"/")...)
+					out := append(ownOptions("", cur[key]), viaMagpieShared("reasonix", magpieID+"/")...)
 					if key == "planner" {
 						out = append([]Option{{Value: "off", Label: "off", Note: "Disable the separate planner"}}, out...)
 					}
@@ -799,7 +806,7 @@ func wslOwnAsleep(id string, keys ...string) func(string) func(map[string]string
 			return nil
 		}
 		return func(cur map[string]string) []Option {
-			return append(ownOptions("", cur[key]), viaMagpie(id, magpieID+"/")...)
+			return withVia(ownOptions("", cur[key]), id, magpieID+"/")
 		}
 	}
 }
@@ -1526,7 +1533,13 @@ func wslLastSeen(name, key string) string {
 // with its mirrored networking settled, ready for a read of its files.
 // Only magpie's memory of them and which run (wslRunningLocked) are
 // asked — nothing is probed, and a stopped distro is never opened.
+// Detection off (wslLooks) reads none: a request's stand-in asks wsl.exe
+// nothing, which on a machine without WSL would answer with a console
+// window asking to install it (#4872).
 func wslReady(kind string) []distro {
+	if !wslLooks() {
+		return nil
+	}
 	wsl.Lock()
 	wslRunningLocked()
 	var ds []distro
@@ -1557,8 +1570,11 @@ func wslClaudeStandIn(model string) string {
 }
 
 // wslClaudeClassifier is ClassifierStandIn for a Claude Code in a running
-// distro, known by the same User-Agent.
+// distro, known by the same User-Agent. Detection off reads none (#4872).
 func wslClaudeClassifier(model string) string {
+	if !wslLooks() {
+		return ""
+	}
 	wsl.Lock()
 	wslRunningLocked()
 	var ds []distro
@@ -1625,18 +1641,39 @@ const wslProbeVersion = 2
 // highest first. The glob this replaced took them in name order, so a
 // command under v18 was found before the default v22's, and v9's after
 // both (as proc.UserPath did on a Mac or Linux, 9f407cafa).
+//
+// The folders are those of proc.UserBinDirs: fnm's default and then its
+// versions, mise's installs, ~/.npmrc's prefix and Homebrew's among them
+// (千里不再 on Discord: a WSL Pi from fnm, not run yet so with no ~/.pi,
+// wasn't found). The shell isn't asked interactively for the PATH ~/.bashrc
+// builds: under timeout(1) an interactive bash stops itself on the
+// terminal (state T) and outlived its timeout on WSL (Ubuntu 24.04).
+//
+// A command on Windows' drives isn't the distro's (parseProbe), so one
+// there is looked past (wslwin): WSL puts Windows' PATH on the distro's,
+// and a Pi npm installed on Windows hid the distro's own from wslbin.
 var wslProbeScript = func() string {
 	s := `nv="${NVM_DIR:-$HOME/.nvm}"; nd=; [ -s "$nv/nvm.sh" ] && command -v bash >/dev/null 2>&1 && nd=$(NVM_DIR="$nv" timeout 10 bash -c '. "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1; nvm_version default 2>/dev/null' </dev/null 2>/dev/null); ` +
+		// Windows' drives, as /proc/mounts has them (C:\ written C:\134)
+		`wm=$(awk '$1 ~ /^[A-Za-z]:/ {print $2}' /proc/mounts 2>/dev/null); ` +
+		`wslwin() { case "$1" in /mnt/[A-Za-z]/*) return 0;; esac; for m in $wm; do case "$1/" in "$m"/*) return 0;; esac; done; return 1; }; ` +
+		`inpath() { o=$IFS; IFS=:; r=; for d in $2; do case "$d" in /*) wslwin "$d" || { [ -f "$d/$1" ] && [ -x "$d/$1" ] && { r="$d/$1"; break; }; };; esac; done; IFS=$o; [ -n "$r" ] && echo "$r"; }; ` +
+		`np=$(sed -n 's/^[[:space:]]*prefix[[:space:]]*=[[:space:]]*//p' "$HOME/.npmrc" 2>/dev/null | head -n1 | tr -d "\"'\r"); case "$np" in "~/"*) np="$HOME/${np#??}";; /*) ;; *) np=;; esac; ` +
+		`fr=; for r in "$FNM_DIR" "${XDG_DATA_HOME:-$HOME/.local/share}/fnm" "$HOME/.fnm"; do case "$r" in /*) [ -d "$r/node-versions" ] && { fr=$r; break; };; esac; done; ` +
+		`vs() { ls "$1" 2>/dev/null | sed 's/^v*\(.*\)$/\1 &/' | sort -t. -k1,1nr -k2,2nr -k3,3nr | cut -d' ' -f2; }; ` +
 		`wslbin() { for d in "$HOME/.bun/bin" "$HOME/.local/bin" "$HOME/.npm-global/bin" "$HOME/.volta/bin" "$HOME/.local/share/pnpm"; do [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }; done; ` +
 		`for v in $nd $(ls "$nv/versions/node" 2>/dev/null | sort -t. -k1.2,1nr -k2,2nr -k3,3nr); do d="$nv/versions/node/$v/bin"; [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }; done; ` +
-		`for d in "$HOME/.local/share/mise/shims" "$HOME/.asdf/shims"; do [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }; done; return 1; }; `
+		`if [ -n "$fr" ]; then for d in "$fr/aliases/default/bin" $(vs "$fr/node-versions" | sed "s|.*|$fr/node-versions/&/installation/bin|"); do [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }; done; fi; ` +
+		`for d in $(vs "$HOME/.local/share/mise/installs/node" | sed "s|.*|$HOME/.local/share/mise/installs/node/&/bin|"); do [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }; done; ` +
+		`for d in "$HOME/.local/share/mise/shims" "$HOME/.asdf/shims" "$HOME/.npm/bin" ${np:+"$np/bin"} "$HOME/.cargo/bin" "$HOME/.deno/bin" /home/linuxbrew/.linuxbrew/bin "$HOME/.linuxbrew/bin"; do [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }; done; return 1; }; ` +
+		`wslcmd() { p=$(command -v "$1" 2>/dev/null) && case "$p" in /*) wslwin "$p" || { echo "$p"; return 0; };; esac; inpath "$1" "$PATH" || wslbin "$1"; }; `
 	s += `echo "home:$HOME"; `
 	for _, k := range wslKinds {
 		if k.dir != "" {
 			s += `[ -d "$HOME/` + k.dir + `" ] && echo dir:` + k.dir + `; `
 		}
 		if k.bin != "" {
-			s += `p=$(command -v ` + k.bin + ` 2>/dev/null || wslbin ` + k.bin + `) && echo "bin:` + k.bin + ` $p"`
+			s += `p=$(wslcmd ` + k.bin + `) && echo "bin:` + k.bin + ` $p"`
 			if k.version {
 				// not one on Windows' drives (WSL's /mnt/c), which isn't the distro's
 				s += ` && case "$p" in /mnt/*) ;; *) echo "ver:` + k.id + ` $(PATH="${p%/*}:$PATH" timeout 10 "$p" --version </dev/null 2>&1 | head -n1)";; esac`
@@ -1787,10 +1824,11 @@ func parseProbe(name, out string) *distro {
 	// the default route of a distro whose 127.0.0.1 is Windows' is
 	// Windows' own next hop (consomme: 198.18.0.2 under a TUN proxy,
 	// #1230), not Windows: an agent left on it is moved to 127.0.0.1
-	// (wslMovedFrom)
-	if wslrun.HostLoopback(d.Net) {
-		d.Gateway = ""
-	}
+	// (wslMovedFrom). A bridged distro's is the LAN's router: Windows is
+	// at its address on the bridge's adapter (wslrun.HostAt), and an agent
+	// an older magpie pointed at the router is written over on the next
+	// sync, the router being among the addresses it was seen at (Was)
+	d.Gateway = wslrun.HostAt(d.Net, d.Gateway, gateway.WSLNets())
 	return d
 }
 

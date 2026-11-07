@@ -141,6 +141,9 @@ func printWeb(w *gui.Web) {
 		if gateway.ContainerAddrs() {
 			fmt.Println(muted.Render("  " + containerNote))
 		}
+		if l := containerLine(); l != "" {
+			fmt.Println(l)
+		}
 		warning := lanWarning()
 		if !w.Auth {
 			warning = "anyone who can reach this address can control Magpie and view its keys"

@@ -58,7 +58,7 @@ func TestSmartUnusedAccountWindows(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Magpie-Session", "smart-unused-affinity")
 	body := []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"check","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_1","content":"done"}]}`)
-	key := p.ID + "|" + conversationID(h, body)
+	key := stickKey(p.ID, h, body)
 	sticks.Lock()
 	sticks.m[key] = stick{who: cs[0].who(), rest: cs[0].rest, model: cs[0].model, turn: 1, at: now}
 	sticks.Unlock()
