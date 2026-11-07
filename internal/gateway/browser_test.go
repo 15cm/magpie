@@ -194,7 +194,7 @@ func TestBrowserExtensionOnlyFromItsOrigin(t *testing.T) {
 	fresh(t)
 	t.Setenv("MAGPIE_ADDR", "")
 	h := lanGuard(New().Handler())
-	newCaller(t, "Laptop")
+	_, secrets := newCaller(t, "Laptop")
 	for _, c := range []struct{ addr, host, origin string }{
 		{"127.0.0.1:5000", "127.0.0.1:3425", "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
 		{"127.0.0.1:5000", "127.0.0.1:3425", "http://localhost:5173"},
@@ -205,6 +205,10 @@ func TestBrowserExtensionOnlyFromItsOrigin(t *testing.T) {
 	} {
 		r := httptest.NewRequest(http.MethodGet, BrowserExtensionPath, nil)
 		r.RemoteAddr, r.Host = c.addr, c.host
+		if c.addr == "192.0.2.7:4000" {
+			// Pass LAN authentication so the extension must refuse it too.
+			r.Header.Set("Authorization", "Bearer "+secrets[0])
+		}
 		r.Header.Set("Connection", "Upgrade")
 		r.Header.Set("Upgrade", "websocket")
 		r.Header.Set("Sec-WebSocket-Version", "13")
