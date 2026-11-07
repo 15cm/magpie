@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -80,6 +81,7 @@ func TestResetExpiryRetriesLater(t *testing.T) {
 // spent, one of them running out within the half hour and its week used, spends
 // that one; an account that doesn't let it is never read.
 func TestSpendExpiringCodexResets(t *testing.T) {
+	t.Setenv("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS", "168")
 	signIn(t)
 	old, oldUntil := expiring.next, expiring.until
 	expiring.next, expiring.until = map[string]time.Time{}, map[string]time.Time{}
@@ -95,7 +97,7 @@ func TestSpendExpiringCodexResets(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"plan_type": "pro",
 				"rate_limit": map[string]any{
 					"primary_window":   map[string]any{"used_percent": 0, "limit_window_seconds": 18000},
-					"secondary_window": map[string]any{"used_percent": 35, "limit_window_seconds": 604800, "reset_at": time.Now().Add(72 * time.Hour).Unix()}},
+					"secondary_window": map[string]any{"used_percent": 100, "limit_window_seconds": 604800, "reset_at": time.Now().Add(time.Hour).Unix()}},
 				"rate_limit_reset_credits": map[string]any{"available_count": 2}})
 		case "/backend-api/wham/rate-limit-reset-credits":
 			json.NewEncoder(w).Encode(map[string]any{"available_count": 2, "credits": []any{
@@ -133,6 +135,9 @@ func TestSpendExpiringCodexResets(t *testing.T) {
 	}
 	if err := SetCodexAutoReset("me@example.com", true); err != nil {
 		t.Fatal(err)
+	}
+	if out, err := AutoUseCodexReset(t.Context(), "me@example.com"); !errors.Is(err, errWeekRenewsSoon) || out.Code != "" {
+		t.Fatalf("weekly: %+v %v", out, err)
 	}
 	SpendExpiringCodexResets(t.Context())
 	if consumed.Load() != 1 || spentID != "soon" {

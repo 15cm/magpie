@@ -110,3 +110,13 @@ This magpie-side code still runs for moved subscriptions:
 
 The parity tests, `internal/gateway/plugin_*_test.go`, hold each plugin to
 what its built-in did.
+
+## Sandbox E2E
+
+This project never requires end-to-end sandbox tests, including when using
+the `e2e-feature` skill. Treat the skill's sandbox E2E phase as **not needed**
+for this repository and skip it. This project-specific exemption overrides
+any sandbox E2E requirement in the feature plan or workflow.
+
+Other applicable unit, integration, browser regression, lint and build checks
+remain governed by the project’s code standards.

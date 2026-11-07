@@ -15,7 +15,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
-const { watchSettingsReads, settingsDrawn } = require("./reader.cjs");
+const { watchSettingsReads, settingsDrawn, reach, wheelTo } = require("./reader.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
 
@@ -166,13 +166,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         const view = page.locator("#view-settings");
         const scroll = () => view.evaluate((v) => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(() => ok(v.scrollTop)))));
-        await view.hover();
-        for (let i = 0; i < 40; i++) {
-          const r = await field.boundingBox();
-          if (r && r.y > 60 && r.y + r.height < 500 && (await scroll()) > 0) break;
-          await page.mouse.wheel(0, 120);
-          await page.waitForTimeout(30);
-        }
+        await reach(page, field);
+        await reach(page, row.locator("button", { hasText: w.add }));
 
         // added from the field, two at once: saved as the gateway cleaned them
         await field.fill("203.0.113.50, 10.1.2.3/8");
@@ -204,13 +199,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // sat under the window's foot, where a click lands on the foot (a
         // scroll that isn't the reader's is put back, #1554)
         const remove = box.locator(".allow-ip-row").filter({ hasText: "10.0.0.0/8" }).locator("button", { hasText: w.remove });
+        // The refusal also lifts the status text above the footer. Leave
+        // the Remove button in the middle of the view as that text opens.
         const viewBox = await view.boundingBox();
-        for (let i = 0; i < 20; i++) {
-          const r = await remove.boundingBox();
-          if (r && r.y > viewBox.y && r.y + r.height < viewBox.y + viewBox.height) break;
-          await page.mouse.wheel(0, 40);
-          await scroll();
-        }
+        await wheelTo(page, remove, viewBox.y + viewBox.height / 2);
         before = await scroll();
         await remove.click();
         await page.waitForFunction(() => document.querySelectorAll("#allowList .allow-ip-row").length === 2);
@@ -235,15 +227,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await row.locator("button", { hasText: zh.add }).click();
       // only this one: the old address taken away leaves the page out
       await box.locator(".allow-ip-row", { hasText: "172.16.0.0/12" }).waitFor();
-      // scrolled with the wheel, as a reader would, until both rows show
-      await page.locator("#view-settings").hover();
-      for (let i = 0; i < 40; i++) {
-        const r = await box.locator(".allow-ip-row").last().boundingBox();
-        if (r && r.y > 60 && r.y + r.height < 460) break;
-        await page.mouse.wheel(0, 120);
-        await page.waitForTimeout(30);
-      }
-      await box.locator(".allow-ip-row").filter({ hasText: "203.0.113.50" }).locator("button").click();
+      const remove = box.locator(".allow-ip-row").filter({ hasText: "203.0.113.50" }).locator("button");
+      await reach(page, remove);
+      await remove.click();
       // the refusal names the address magpie sees the page from
       // (Mathresearcher on Discord: which one?), in the page's language
       const says = await page.evaluate((s) => t(s, { addr: "203.0.113.50" }), en.shutOut);
@@ -257,6 +243,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await fits(box);
       const view = page.locator("#view-settings");
       const scroll = () => view.evaluate((v) => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(() => ok(v.scrollTop)))));
+      await reach(page, fix);
       const before = await scroll();
       await fix.click();
       await page.waitForFunction(() => !document.querySelector("#allowList .rule-row .sub.err"));

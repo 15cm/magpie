@@ -44,6 +44,8 @@ const quotaUsage = `usage: magpie quota [<provider>…] [--json]
   reset it) and still spends the reset about to expire.
   It is the account's standing setting, held resets or not; off stops it, and alone
   it says which accounts have it on. It is off until turned on.
+  MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=24 spends the week's only while its
+  renewal is at least 24 hours away (0 to 168; a bad value pauses it).
   quota auto-reset lead 2h spends the one about to expire two hours before it does
   instead, for every account, from 15m to 24h; default puts back the half hour, and
   alone it says what is set. Earlier loses what the windows have left then.
@@ -379,9 +381,9 @@ func quotaAutoResetCmd(args []string) error {
 	}
 	switch week, expiring := provider.CodexAutoResetWhen(user); {
 	case week && expiring:
-		fmt.Println(green.Render("✓"), user+":", "uses a reset by itself once its week is used up and no other account can answer, or before its credits are spent, one a week at most, and the one about to expire "+leadWords(settings.Load().ResetLead())+" before it does, or at once when held up past then")
+		fmt.Println(green.Render("✓"), user+":", "uses a reset by itself once its week is used up"+provider.WeekAheadWords()+" and no other account can answer, or before its credits are spent, one a week at most, and the one about to expire "+leadWords(settings.Load().ResetLead())+" before it does, or at once when held up past then")
 	case week:
-		fmt.Println(green.Render("✓"), user+":", "uses a reset by itself once its week is used up and no other account can answer, or before its credits are spent, one a week at most; one about to expire is left to run out")
+		fmt.Println(green.Render("✓"), user+":", "uses a reset by itself once its week is used up"+provider.WeekAheadWords()+" and no other account can answer, or before its credits are spent, one a week at most; one about to expire is left to run out")
 	case expiring:
 		fmt.Println(green.Render("✓"), user+":", "uses the reset about to expire "+leadWords(settings.Load().ResetLead())+" before it does, or at once when held up past then; a week used up is waited out")
 	default:
@@ -452,9 +454,9 @@ func leadWords(d time.Duration) string {
 func autoResetSay(user string) string {
 	switch week, expiring := provider.CodexAutoResetWhen(user); {
 	case week && expiring:
-		return "uses a reset by itself when its week runs out, or before one expires"
+		return "uses a reset by itself when its week runs out" + provider.WeekAheadWords() + ", or before one expires"
 	case week:
-		return "uses a reset by itself when its week runs out"
+		return "uses a reset by itself when its week runs out" + provider.WeekAheadWords()
 	case expiring:
 		return "uses a reset by itself before one expires"
 	}

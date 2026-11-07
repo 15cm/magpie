@@ -2535,8 +2535,9 @@ function cliTag(a) {
     v.title = t("The {agent} app {v}. It reads the same settings as the CLI: connecting {agent} here connects both", { agent: a.name, v: c.app });
     box.append(v);
   }
-  // only the Claude Code Desktop's Code tab runs (cybercaius, young02036)
+  // Only Desktop's Code tab (cybercaius, young02036)
   if (c.inDesktop) {
+    box.classList.add("in-desktop");
     const v = el("span", "ag-ver ag-app", t("In Claude Desktop"));
     v.title = (c.desktopVersion ? t("Claude Code {v}, included in Claude Desktop", { v: c.desktopVersion }) + "\n" : "")
       + t("No Claude Code of its own is installed here: Claude Desktop's Code tab runs this one, reading this {path}. Its Code sessions in WSL use the WSL card.", { path: a.path || "~/.claude/settings.json" });
@@ -17773,7 +17774,7 @@ function panelQuotaCard(q) {
       if (policy) {
         const w = autoResetWhen(q);
         const on = AUTO_RESET_CASES.filter((c) => w[c.id]);
-        say.append(el("b", "", t("Auto-use resets:")), document.createTextNode(" " + (on.length === 1 ? t(on[0].say) : t(on.length ? "On" : "Off"))));
+        say.append(el("b", "", t("Auto-use resets:")), document.createTextNode(" " + (on.length === 1 ? autoResetSay(on[0]) : on.length && (state.settings?.codexWeekResetMinHours || state.settings?.codexWeekResetMinHoursBad) ? on.map((c) => autoResetSay(c)).join(" · ") : t(on.length ? "On" : "Off"))));
       }
       if (credits) {
         if (policy) say.append(document.createTextNode(" · "));
@@ -17814,21 +17815,17 @@ function resetsWords(r, q) {
     const at = new Date(r.until);
     w.append(el("span", "resets-until", " · " + t("until {when}", { when: resetClock(at) })));
     w.title = r.each?.length ? resetsEach(r) : t("The first runs out {when}", { when: at.toLocaleString(intlLang()) });
-    // whether the one that runs out first is kept from going to waste:
-    // with Auto-use on it is used shortly before it does (#624, #719)
-    // or, the week's alone, when the week runs out (tongzhenbao on X)
     if (q && autoResetKept(q)) {
       const { expiring: x, week } = autoResetWhen(q);
-      w.append(el("span", "resets-kept" + (x || week ? " on" : ""), " · " + t(x ? "auto-used before it expires" : week ? "auto-used when the week runs out" : "not auto-used")));
+      w.append(el("span", "resets-kept" + (x || week ? " on" : ""), " · " + (week && !x && state.settings?.codexWeekResetMinHoursBad ? t("auto-used when the week runs out") + " · " + t("paused") : week && !x && state.settings?.codexWeekResetMinHours > 0 ? t("auto-used when the week runs out and refresh is at least {hours} h ahead", { hours: state.settings.codexWeekResetMinHours }) : t(x ? "auto-used before it expires" : week ? "auto-used when the week runs out" : "not auto-used"))));
       w.title += "\n" + t(x ? "Auto-use is on: the reset that runs out first is used {lead} before it does, if this account's windows have been used, so what they have left can be used until then and it isn't lost; at once if the account is held up until after then."
         : week ? "Auto-use is on for a used-up week: a reset is used by itself when this account's week is used up, before its credits are spent. One about to run out is otherwise lost unless it's used by hand or the week runs out before then."
-        : "Auto-use is off: the reset that runs out first is lost unless it's used by hand before then.", resetLeadVars());
+        : "Auto-use is off: the reset that runs out first is lost unless it's used by hand before then.", resetLeadVars()) + (week && !x ? autoResetWeekTitle() : "");
     }
   } else if (r.each?.length) w.title = resetsEach(r);
   return w;
 }
 
-// resetsEach: every reset left and when it runs out, soonest first (#960)
 function resetsEach(r) {
   return r.each.map((c, i) => {
     const when = c.until ? new Date(c.until).toLocaleString(intlLang()) : "";
@@ -17838,13 +17835,11 @@ function resetsEach(r) {
   }).join("\n");
 }
 
-// codexResetCard: this computer's Codex card, or a remote magpie's (#3850)
 function codexResetCard(q) {
   if (!q.resets || q.resets.byWindow) return false;
   return q.provider === "codex" || !!(q.from && q.user && /^[^/]+\/codex$/.test(q.provider || ""));
 }
 
-// resetUseTitle: a use spends the one that runs out first
 function resetUseTitle(q) {
   const r = q.resets;
   return (r.until
@@ -17853,8 +17848,7 @@ function resetUseTitle(q) {
     + "\n" + t("This account's windows start again at once, as if none had been used. You're asked before anything is spent.");
 }
 
-// Whether a Codex account spends a reset by itself (codexAutoReset, the CLI's
-// quota auto-reset), off unless turned on; only a named account can have it.
+// Codex reset policy is kept by account name, off by default (#719).
 const AUTO_RESET_KEPT = { codex: "codexAutoReset" };
 function autoResetKept(q) {
   return !!(q.user && AUTO_RESET_KEPT[q.provider] && !q.resets?.byWindow);
@@ -17863,8 +17857,7 @@ function autoResetOn(q) {
   const w = autoResetWhen(q);
   return w.week || w.expiring;
 }
-// autoResetWhen: the times it uses one by itself, a switch each (#2078);
-// one not kept to one (codexAutoResetOnly) uses one at both.
+// Unnarrowed accounts use both triggers (#2078); an account not on uses neither.
 function autoResetWhen(q) {
   if (!autoResetKept(q) || !(state.settings?.[AUTO_RESET_KEPT[q.provider]] || []).includes(q.user.toLowerCase())) return { week: false, expiring: false };
   return autoResetWhenOf(state.settings?.codexAutoResetOnly?.[q.user.toLowerCase()]);
@@ -17872,8 +17865,7 @@ function autoResetWhen(q) {
 function autoResetWhenOf(only) {
   return { week: only !== "expiring", expiring: only !== "week" };
 }
-// AUTO_RESET_CASES: the two times, in the order they're shown, with their
-// words and what each switch's title says on and off.
+// The two triggers, in display order, with switch titles.
 const AUTO_RESET_CASES = [
   { id: "week", say: "when its week runs out",
     on: "On: a reset is used by itself when this account's week is used up and no other account can answer, one a week at most. The five hours running out never uses one. Click to turn it off.",
@@ -17882,15 +17874,27 @@ const AUTO_RESET_CASES = [
     on: "On: the reset that runs out first is used {lead} before it does, if this account's windows have been used, or at once when the account is held up until after then. Click to turn it off.",
     off: "Off: a reset that runs out unused is lost. Click to turn it on." },
 ];
-// autoResetStatus says what the account does now, after a switch.
-function autoResetStatus(user, w) {
-  if (w.week && w.expiring) return t("{who} uses a reset by itself when its week runs out, or before one expires", { who: user });
-  if (w.week) return t("{who} uses a reset by itself only when its week runs out", { who: user });
-  if (w.expiring) return t("{who} uses a reset by itself only before one expires", { who: user });
-  return t("{who} no longer uses a reset by itself", { who: user });
+// Missing read-only fields from an older API keep the original weekly words.
+function autoResetSay(c, s = state?.settings) {
+  const h = s?.codexWeekResetMinHours, bad = s?.codexWeekResetMinHoursBad;
+  if (c.id !== "week") return t(c.say);
+  if (bad) return t(c.say) + " · " + t("paused");
+  return h > 0 ? t("when its week runs out and refresh is at least {hours} h ahead", { hours: h }) : t(c.say);
+}
+function autoResetWeekTitle(s = state?.settings) {
+  const h = s?.codexWeekResetMinHours, bad = s?.codexWeekResetMinHoursBad;
+  if (bad) return "\n" + t("{env} isn't a whole number of hours from 0 to 168, so a used-up week uses no reset by itself.", { env: "MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=" + bad });
+  return h > 0 ? "\n" + t("A week that renews in under {hours} h is waited out instead.", { hours: h }) : "";
+}
+function autoResetCaseTitle(c, on, s = state?.settings) {
+  return t(on ? c.on : c.off, resetLeadVars(s)) + (c.id === "week" ? autoResetWeekTitle(s) : "");
+}
+async function autoResetStatus(user, w, s = state?.settings) {
+  await import("./autoresetown.js");
+  return autoResetStatusWords(user, w, s);
 }
 
-// autoResetRow: that say on an account's card, each time on a line with its switch (#719, #2078).
+// Each trigger has its own switch, even without resets held (#719, #2078).
 function autoResetRow(q, cls) {
   if (!autoResetKept(q)) return null;
   const on = autoResetOn(q);
@@ -17904,8 +17908,8 @@ function autoResetRow(q, cls) {
   for (const c of AUTO_RESET_CASES) {
     const line = el("div", "ar-case" + (w[c.id] ? " on" : ""));
     line.dataset.case = c.id;
-    const words = el("span", "ar-case-say", t(c.say));
-    words.title = t(w[c.id] ? c.on : c.off, resetLeadVars());
+    const words = el("span", "ar-case-say", autoResetSay(c));
+    words.title = autoResetCaseTitle(c, w[c.id]);
     line.append(words, autoResetButton(q, c));
     cases.append(line);
   }
@@ -17914,8 +17918,6 @@ function autoResetRow(q, cls) {
   return row;
 }
 
-// resetsUsedLine: the last reset magpie used, when and why; every one in its
-// title (foobra12 on Discord). Nothing when magpie used none.
 function resetsUsedLine(q) {
   const used = q.resetsUsed || [];
   if (!used.length) return null;
@@ -17932,11 +17934,10 @@ function resetUsedWhy(why) {
 }
 function autoResetTitle(on) {
   return t(on ? "On: a reset is used by itself when this account's week is used up and no other account can answer, one a week at most, and the one about to run out is used {lead} before it does, if the account has been used, or at once when the account is held up until after then. Otherwise the five hours running out never uses one. Click to turn it off."
-    : "Off: this account's resets are used only by hand. Turned on, one is used by itself when its week is used up and no other account can answer, one a week at most, and the one about to run out {lead} before it does, if the account has been used, or at once when the account is held up until after then. Otherwise the five hours running out never uses one.", resetLeadVars());
+    : "Off: this account's resets are used only by hand. Turned on, one is used by itself when its week is used up and no other account can answer, one a week at most, and the one about to run out {lead} before it does, if the account has been used, or at once when the account is held up until after then. Otherwise the five hours running out never uses one.", resetLeadVars()) + autoResetWeekTitle();
 }
 
-// How long before a reset runs out it is used (codexResetLead; the owner, 10-30):
-// half an hour unless set or out of range, as the gateway reads it. RESET_LEADS in minutes.
+// Expiry lead: 30 minutes unless set to 3–1440 (owner, 10-30).
 const RESET_LEADS = [3, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
 function resetLeadMinutes(s = state?.settings) {
   const m = s?.codexResetLead;
@@ -17956,21 +17957,21 @@ function autoResetBrief(q) {
   s.append(el("span", "acct-auto-say", t("Auto-use")), autoResetButton(q));
   const w = autoResetWhen(q);
   s.title = (q.resets?.count ? t(q.resets.count === 1 ? "1 reset" : "{n} resets", { n: q.resets.count }) + "\n" : "")
-    + t("Auto-use resets:") + "\n" + AUTO_RESET_CASES.map((c) => "· " + t(c.say) + ": " + t(w[c.id] ? "On" : "Off")).join("\n");
+    + t("Auto-use resets:") + "\n" + AUTO_RESET_CASES.map((c) => "· " + autoResetSay(c) + ": " + t(w[c.id] ? "On" : "Off") + (c.id === "week" ? autoResetWeekTitle() : "")).join("\n");
   const used = resetsUsedLine(q);
   if (used) s.title += "\n" + used.textContent;
   return s;
 }
 
-// autoResetButton: a switch; with c, that time alone, else both (the brief's).
+// A case switches one trigger; the brief switches both, off if either is on.
 function autoResetButton(q, c) {
   const on = c ? autoResetWhen(q)[c.id] : autoResetOn(q);
   const b = el("button", "lib-switch auto-reset" + (on ? " on" : ""));
   b.type = "button";
   b.setAttribute("role", "switch");
   b.setAttribute("aria-checked", String(on));
-  b.setAttribute("aria-label", t("Auto-use resets") + (c ? " · " + t(c.say) : ""));
-  b.title = c ? t(on ? c.on : c.off, resetLeadVars()) : autoResetTitle(on);
+  b.setAttribute("aria-label", t("Auto-use resets") + (c ? " · " + autoResetSay(c) : ""));
+  b.title = c ? autoResetCaseTitle(c, on) : autoResetTitle(on);
   if (c) b.dataset.case = c.id;
   b.append(el("i"));
   b.onclick = async (e) => {
@@ -17980,7 +17981,7 @@ function autoResetButton(q, c) {
     try {
       prefs = await writingPrefs(api("settings/" + q.provider + "-auto-reset", c ? { user: q.user, on: !on, when: c.id } : { user: q.user, on: !on }));
       state.settings = prefs;
-      status(autoResetStatus(q.user, autoResetWhen(q)), "ok");
+      status(await autoResetStatus(q.user, autoResetWhen(q)), "ok");
       renderQuotas();
       if ($("#codexAutoResetRow")) renderAutoResetOwn(prefs); // Settings › Usage says the same
     } catch (err) {

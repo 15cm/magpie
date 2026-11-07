@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/yetone/magpie/internal/appdir"
-	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/steady"
 )
 
@@ -80,7 +79,7 @@ func keepState(s stateJSON) {
 
 // keptFile is what keepState keeps of s.
 func keptFile(s stateJSON) stateFile {
-	s.Settings = settings.Settings{}
+	s.Settings = stateSettingsJSON{}
 	// and what is told once: a notice, a file recovered after a crash
 	s.Notice, s.Connected, s.Recovered = "", nil, nil
 	// and the magpie serving the gateway now, which the next start asks
@@ -128,7 +127,7 @@ func lastKnown() (stateJSON, bool) {
 	if len(b) == 0 || json.Unmarshal(b, &f) != nil || f.Version != Version || f.State.Agents == nil {
 		return stateJSON{}, false
 	}
-	f.State.Settings = settings.Load()
+	f.State.Settings = currentStateSettings()
 	f.State.Last = true
 	return f.State, true
 }

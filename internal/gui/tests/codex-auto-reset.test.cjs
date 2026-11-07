@@ -38,18 +38,18 @@ const quotas = [
     windows: [{ name: "7 days", used: 100, resetsAt: later }], resets: { count: 3, until: later } },
 ];
 
-function serve(lang, posts) {
+function serve(lang, posts, policy = {}, reads = {}) {
   // as the settings keep it: the accounts on, and the ones kept to one time
   let auto = [], only = {};
   const when = (who) => auto.includes(who) ? { week: only[who] !== "expiring", expiring: only[who] !== "week" } : { week: false, expiring: false };
-  const settings = () => ({ theme: "light", lang, tray: "panel", quotaLeft: false, currency: "usd", trayUsages: ["codex", "zhipu", "codex-plugin"], trayUsageEvery: 3, codexAutoReset: auto, codexAutoResetOnly: only });
+  const settings = () => ({ theme: "light", lang, tray: "panel", quotaLeft: false, currency: "usd", trayUsages: ["codex", "zhipu", "codex-plugin"], trayUsageEvery: 3, codexAutoReset: auto, codexAutoResetOnly: only, ...policy });
   return async (route) => {
     const req = route.request(), url = new URL(req.url());
     const json = (data) => route.fulfill({ json: data });
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"${lang}",theme:"light",web:false};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
-    if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: settings() });
-    if (url.pathname === "/api/settings") return json(settings());
+    if (url.pathname === "/api/state") { reads.state = (reads.state || 0) + 1; return json({ agents: [], profiles: [], settings: settings() }); }
+    if (url.pathname === "/api/settings") { reads.settings = (reads.settings || 0) + 1; return json(settings()); }
     if (url.pathname === "/api/settings/codex-auto-reset") {
       const body = req.postDataJSON();
       posts.push(body);
@@ -291,5 +291,73 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(errors, []);
     });
     }
+  }
+}
+
+// Exercise the words the reader sees, including the button's accessible name
+// and the status returned after a real switch press. Older APIs omit the fields.
+for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
+  for (const value of [0, 24, "abc"]) {
+    test(`${process.env.BROWSER} ${lang}: weekly policy ${value} on main and panel`, async (t) => {
+      const engine = process.env.BROWSER || "chromium";
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const policy = value === "abc" ? { codexWeekResetMinHours: 0, codexWeekResetMinHoursBad: value } : { codexWeekResetMinHours: value };
+      for (const panel of [false, true]) {
+        const page = await browser.newPage({ viewport: { width: 420, height: 800 }, reducedMotion: "reduce" });
+        const reads = {};
+        await page.route("**/*", serve(lang, [], policy, reads));
+        await page.goto("http://magpie.test/?view=usage" + (panel ? "&mode=panel" : ""));
+        if (panel) await page.locator('#ptabs [data-ptab="usage"]').click();
+        await page.waitForFunction(() => !quotasLoading);
+        const root = panel ? '.pq-autoreset[data-user="Me@example.com"]' : '.quota-autoreset[data-user="Me@example.com"]';
+        await page.locator(root + ' [data-case="week"] .auto-reset').waitFor();
+        const expected = await page.evaluate(({ lang, value }) => {
+          const say = (k, vars = {}) => Object.entries(vars).reduce((s, [k, v]) => s.replaceAll("{" + k + "}", v), lang === "en" ? k : I18N[lang][k]);
+          return {
+            week: value === 24 ? say("when its week runs out and refresh is at least {hours} h ahead", { hours: 24 }) : say("when its week runs out") + (value === "abc" ? " · " + say("paused") : ""),
+            expiry: say("before one expires"),
+            title: value === 24 ? say("A week that renews in under {hours} h is waited out instead.", { hours: 24 }) : value === "abc" ? say("{env} isn't a whole number of hours from 0 to 168, so a used-up week uses no reset by itself.", { env: "MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=abc" }) : "",
+            status: say(value === 24 ? "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead" : "{who} uses a reset by itself only when its week runs out", { who: "Me@example.com", hours: 24 }),
+            kept: say(value === 24 ? "auto-used when the week runs out and refresh is at least {hours} h ahead" : "auto-used when the week runs out", { hours: 24 }) + (value === "abc" ? " · " + say("paused") : ""),
+          };
+        }, { lang, value });
+        const week = page.locator(root + ' .ar-case[data-case="week"]');
+        const expiry = page.locator(root + ' .ar-case[data-case="expiring"]');
+        assert.equal(await week.locator(".ar-case-say").textContent(), expected.week);
+        assert.equal(await expiry.locator(".ar-case-say").textContent(), expected.expiry);
+        assert(reads.state >= 1, "initial policy came through /api/state");
+        assert.equal(reads.settings || 0, 0, "card has not loaded the Settings endpoint");
+        const before = reads.state;
+        await page.evaluate(async () => { await load(true); renderQuotas(); });
+        assert(reads.state > before, "ordinary refresh read /api/state again");
+        assert.equal(await week.locator(".ar-case-say").textContent(), expected.week, "refresh preserves serving policy");
+
+        assert((await week.locator("button").getAttribute("aria-label")).includes(expected.week));
+        const expiryTitle = await expiry.locator("button").getAttribute("title");
+        if (expected.title) assert((await week.locator("button").getAttribute("title")).includes(expected.title));
+        await week.locator("button").click();
+        await page.locator(root + ' button[data-case="week"][aria-checked="true"]').waitFor();
+        const status = await page.locator("#status").textContent();
+        assert(status.startsWith(expected.status), status);
+        if (value === "abc") assert(status.includes(expected.title), status);
+        const tags = await page.locator(".resets-kept").allTextContents();
+        assert(tags.some((text) => text.includes(expected.kept)), JSON.stringify(tags));
+        assert.equal(await expiry.locator("button").getAttribute("title"), expiryTitle, "weekly policy leaves expiry wording intact");
+        if (!panel) {
+          const brief = await page.evaluate(() => autoResetBrief({ provider: "codex", user: "Me@example.com" }).title);
+          assert(brief.includes(expected.week));
+          if (expected.title) assert(brief.includes(expected.title));
+          const combinedTitle = await page.evaluate(() => autoResetButton({ provider: "codex", user: "Me@example.com" }).title);
+          if (expected.title) assert(combinedTitle.includes(expected.title));
+        }
+        await expiry.locator("button").click();
+        await page.locator(root + ' button[data-case="expiring"][aria-checked="true"]').waitFor();
+        if (value === 24) assert((await page.locator("#status").textContent()).includes("24"));
+        if (value === "abc") assert((await page.locator("#status").textContent()).includes(expected.title));
+        assert.equal(await expiry.locator("button").getAttribute("title"), await page.evaluate(() => t(AUTO_RESET_CASES[1].on, resetLeadVars())), "expiry title stays unchanged when enabled");
+        await page.close();
+      }
+    });
   }
 }

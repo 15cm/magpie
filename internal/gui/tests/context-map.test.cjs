@@ -265,6 +265,30 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     }
   }
 
+  // Before the card's width observer applies its narrow aspect ratio, the
+  // map is at its 132px minimum height. Bare tiles still fit their assigned
+  // boxes there; hidden labels must not force their padding into a neighbour.
+  test(`${engine}: bare tiles fit at the map's minimum height`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    t.after(() => browser.close());
+    const page = await (await browser.newContext({ viewport: { width: 420, height: 900 }, reducedMotion: "reduce" })).newPage();
+    page.setDefaultTimeout(5000);
+    page.setDefaultNavigationTimeout(60000);
+    const { card, errors } = await open(page, "zh", 420);
+    const map = card.locator(".ctx-map");
+    await map.evaluate((m) => { m.style.height = "132px"; m.style.aspectRatio = "auto"; });
+    await page.waitForFunction(() => document.querySelector(".ctx-sess.open .ctx-map")?.dataset.size === "328x132");
+    const rects = await map.locator(".ctx-tile").evaluateAll((tiles) => tiles.map((n) => {
+      const r = n.getBoundingClientRect();
+      return { kind: n.className, left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    }));
+    for (const [i, a] of rects.entries()) for (const b of rects.slice(i + 1)) {
+      assert.ok(a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5,
+        `two tiles overlap at minimum height: ${JSON.stringify([a, b])}`);
+    }
+    assert.deepEqual(errors, []);
+  });
+
   // a part of a few tokens beside parts of thousands is still a tile one
   // sees and points at: the memory's 49 tokens beside 72K, the window not
   // known, were laid as a strip thinner than the gap between tiles and

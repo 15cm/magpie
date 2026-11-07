@@ -308,7 +308,7 @@ type stateJSON struct {
 	// from saving its files (a ~/.config sudo left root's), which the
 	// window offers to make theirs again; "" when magpie can save
 	ConfigBlocked string            `json:"configBlocked,omitempty"`
-	Settings      settings.Settings `json:"settings"`
+	Settings      stateSettingsJSON `json:"settings"`
 	// FX is the dollar-to-yuan rate the cny currency choice shows costs at,
 	// here too (not only in settingsJSON) so a cost drawn before the reader
 	// ever opens Settings already converts, if cny was chosen last time.
@@ -383,8 +383,31 @@ func currentFX() fxJSON {
 	return out
 }
 
+// codexWeekResetJSON is derived from the serving process, never saved.
+type codexWeekResetJSON struct {
+	CodexWeekResetMinHours    int    `json:"codexWeekResetMinHours"`
+	CodexWeekResetMinHoursBad string `json:"codexWeekResetMinHoursBad,omitempty"`
+}
+
+func codexWeekResetState() codexWeekResetJSON {
+	hours, raw, ok := provider.CodexWeekResetMinHours()
+	s := codexWeekResetJSON{CodexWeekResetMinHours: hours}
+	if !ok {
+		s.CodexWeekResetMinHours = 0
+		s.CodexWeekResetMinHoursBad = raw
+	}
+	return s
+}
+
+// stateSettingsJSON carries the same read-only policy as the Settings page.
+type stateSettingsJSON struct {
+	settings.Settings
+	codexWeekResetJSON
+}
+
 // settingsJSON is the Settings page: the two choices plus the facts it shows.
 type settingsJSON struct {
+	codexWeekResetJSON
 	settings.Settings
 	Version string `json:"version"`
 	Dir     string `json:"dir"`     // where magpie keeps its files, as shown
@@ -758,6 +781,7 @@ func codexWindowUnder(st settings.Settings, model string) *codexRunWindow {
 
 func settingsState() settingsJSON {
 	s := settingsJSON{Settings: settings.Load(), Version: Version, Dir: tilde(settings.Dir()), Portable: settings.Portable() != "", Gateway: gateway.URL()}
+	s.codexWeekResetJSON = codexWeekResetState()
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
@@ -2750,8 +2774,12 @@ func held(h http.Handler) http.Handler {
 	})
 }
 
+func currentStateSettings() stateSettingsJSON {
+	return stateSettingsJSON{settings.Load(), codexWeekResetState()}
+}
+
 func state() stateJSON {
-	s := stateJSON{Agents: []agentJSON{}, Profiles: []profileJSON{}, Catalog: catalog.Source(), Settings: settings.Load()}
+	s := stateJSON{Agents: []agentJSON{}, Profiles: []profileJSON{}, Catalog: catalog.Source(), Settings: currentStateSettings()}
 	// state() is asked for after nearly every click, so the rate — a
 	// network fetch once every TTL — is only worth its rare latency when
 	// cny is actually chosen; usd never looks at it
