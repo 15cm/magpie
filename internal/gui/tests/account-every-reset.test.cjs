@@ -66,6 +66,12 @@ for (const [engine, browserType] of [["chromium", chromium], ["webkit", webkit]]
       }, lang);
       const got = await row.locator(".aq-w").evaluateAll((ms) => ms.map((m) => m.querySelector(".aq-r")?.textContent || ""));
       assert.deepEqual(got, want, `${at}: the 5 hours and the 7 days each say when they reset`);
+      // WebKit lays out again when the sheet's vertical scrollbar appears.
+      // Wait for that layout to fit, then check the row's exact edges too.
+      await page.waitForFunction(() => {
+        const body = document.querySelector(".modal .ebody");
+        return body && body.scrollWidth <= body.clientWidth;
+      });
       // in the row, and the sheet not scrolling sideways
       const fit = await row.evaluate((r) => {
         const rb = r.getBoundingClientRect(), body = document.querySelector(".modal .ebody");
@@ -74,6 +80,10 @@ for (const [engine, browserType] of [["chromium", chromium], ["webkit", webkit]]
       for (const o of fit.out) assert.ok(o <= 0, `${at}: a window's reset stays in its row (${o}px past it)`);
       assert.ok(fit.wide <= 0, `${at}: the sheet doesn't scroll sideways (${fit.wide}px)`);
       assert.deepEqual(errors, [], at);
+      if (process.env.SHOTS) {
+        await page.locator(".modal").evaluate((m) => Promise.all(m.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => {}))));
+        await page.screenshot({ path: path.join(process.env.SHOTS, `account-every-reset-${engine}-${p.id}-${lang}-${width}.png`) });
+      }
       await context.close();
     }
   });
