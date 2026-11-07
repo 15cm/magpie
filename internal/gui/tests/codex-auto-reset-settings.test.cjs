@@ -17,14 +17,14 @@ const { watchSettingsReads, settingsDrawn, reach } = require("./reader.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
 
-function server(lang, users, posts) {
+function server(lang, users, posts, policy = {}) {
   const fixed = {
     theme: "light", lang, tray: "panel", quotaLeft: false, currency: "usd", dock: false, dockWindow: false, proxy: "",
     redact: false, redactPersonal: false, redactWords: [], codexWarmup: "", claudeWarmup: "", codexWarmAt: "", claudeWarmAt: "",
     trayUsage: "", trayUsageEvery: 3, vision: "", imageGen: "", version: "0.1.900", dir: "~/.config/magpie",
     gateway: "http://127.0.0.1:3425", proxyNow: "none", proxySource: "none", visionModels: [], imageGenModels: [], lanURLs: [],
     fx: { rate: 7.2, at: new Date().toISOString(), stale: false },
-    codexUsers: users, codexAutoReset: [], codexAutoResetOnly: {},
+    codexUsers: users, codexAutoReset: [], codexAutoResetOnly: {}, ...policy,
   };
   let cur = fixed;
   return async (route) => {
@@ -167,4 +167,38 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     assert.equal(await page.locator(".ar-own").count(), 0);
     assert.deepEqual(errors, []);
   });
+}
+
+for (const lang of Object.keys(words)) {
+  for (const value of [0, 24, "abc"]) {
+    test(`${process.env.BROWSER} ${lang}: Settings weekly policy ${value}`, async (t) => {
+      const engine = process.env.BROWSER || "chromium";
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const page = await browser.newPage({ viewport: { width: 420, height: 700 }, reducedMotion: "reduce" });
+      const policy = value === "abc" ? { codexWeekResetMinHoursBad: "abc" } : { codexWeekResetMinHours: value };
+      await page.route("**/*", server(lang, [users[0]], [], policy));
+      await watchSettingsReads(page);
+      await page.goto("http://magpie.test/?view=settings&tab=usage");
+      await settingsDrawn(page);
+      await page.locator('.ar-own-case[data-case="week"] .ar-own-say').waitFor();
+      const expected = await page.evaluate(({ lang, value }) => {
+        const say = (key) => (lang === "en" ? key : I18N[lang][key]).replaceAll("{hours}", "24");
+        return { week: value === 24 ? say("when its week runs out and refresh is at least {hours} h ahead") : say("when its week runs out") + (value === "abc" ? " · " + say("paused") : ""), expiry: say("before one expires"), title: value === 24 ? say("A week that renews in under {hours} h is waited out instead.") : value === "abc" ? "MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=abc" : "" };
+      }, { lang, value });
+      const week = page.locator('.ar-own-case[data-case="week"]'), expiry = page.locator('.ar-own-case[data-case="expiring"]');
+      assert.equal(await week.locator(".ar-own-say").textContent(), expected.week);
+      assert.equal(await expiry.locator(".ar-own-say").textContent(), expected.expiry);
+      assert((await week.locator("[aria-label]").getAttribute("aria-label")).includes(expected.week));
+      if (expected.title) assert((await week.locator(".ar-own-say").getAttribute("title")).includes(expected.title));
+      await reach(page, week.locator(".opt").last());
+      await week.locator(".opt").last().click();
+      await page.waitForFunction(() => document.querySelector('.ar-own-case[data-case="week"] .opt.on') === document.querySelector('.ar-own-case[data-case="week"] .opt:last-child'));
+      if (expected.title) assert((await week.locator(".ar-own-say").getAttribute("title")).includes(expected.title));
+      await page.waitForFunction(() => document.querySelector("#status").textContent.includes("alice@example.com"));
+      const status = await page.locator("#status").textContent();
+      if (value === 24) assert(status.includes("24"), status);
+      if (value === "abc") assert(status.includes("MAGPIE_CODEX_WEEK_RESET_MIN_HOURS=abc"), status);
+    });
+  }
 }

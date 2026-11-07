@@ -4,6 +4,14 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "when its week runs out and refresh is at least {hours} h ahead": "周额度用完且距离刷新至少 {hours} 小时时",
+    "auto-used when the week runs out and refresh is at least {hours} h ahead": "周额度用完且距离刷新至少 {hours} 小时时自动使用",
+    "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} 仅在周额度用完且距离刷新至少 {hours} 小时时自动使用重置卡",
+    "{who} uses a reset by itself when its week runs out and refresh is at least {hours} h ahead, or before one expires": "{who} 会在周额度用完且距离刷新至少 {hours} 小时时、或重置卡到期前自动使用重置卡",
+    "A week that renews in under {hours} h is waited out instead.": "若周额度将在 {hours} 小时内刷新，则等待刷新。",
+    "paused": "已暂停",
+    "{env} isn't a whole number of hours from 0 to 168, so a used-up week uses no reset by itself.": "{env} 不是 0 到 168 之间的整数小时数，因此周额度用完不会自动使用重置卡。",
+
     "MCP router": "MCP 路由",
     "in {agents}": "用于 {agents}",
     "Browser access": "浏览器访问",
@@ -4290,6 +4298,14 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
   },
   "zh-TW": {
+    "when its week runs out and refresh is at least {hours} h ahead": "週額度用完且距離刷新至少 {hours} 小時時",
+    "auto-used when the week runs out and refresh is at least {hours} h ahead": "週額度用完且距離刷新至少 {hours} 小時時自動使用",
+    "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} 僅在週額度用完且距離刷新至少 {hours} 小時時自動使用重置卡",
+    "{who} uses a reset by itself when its week runs out and refresh is at least {hours} h ahead, or before one expires": "{who} 會在週額度用完且距離刷新至少 {hours} 小時時、或重置卡到期前自動使用重置卡",
+    "A week that renews in under {hours} h is waited out instead.": "若週額度將在 {hours} 小時內刷新，則等待刷新。",
+    "paused": "已暫停",
+    "{env} isn't a whole number of hours from 0 to 168, so a used-up week uses no reset by itself.": "{env} 不是 0 到 168 之間的整數小時數，因此週額度用完不會自動使用重置卡。",
+
     "MCP router": "MCP 路由",
     "in {agents}": "用於 {agents}",
     "Browser access": "瀏覽器存取",
@@ -8561,6 +8577,14 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
   },
   ja: {
+    "when its week runs out and refresh is at least {hours} h ahead": "週の枠を使い切り、更新まで {hours} 時間以上あるとき",
+    "auto-used when the week runs out and refresh is at least {hours} h ahead": "週の枠を使い切り、更新まで {hours} 時間以上あるときに自動使用",
+    "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} は週の枠を使い切り、更新まで {hours} 時間以上あるときだけリセットを自動使用します",
+    "{who} uses a reset by itself when its week runs out and refresh is at least {hours} h ahead, or before one expires": "{who} は週の枠を使い切り、更新まで {hours} 時間以上あるとき、または期限が切れる前にリセットを自動使用します",
+    "A week that renews in under {hours} h is waited out instead.": "更新まで {hours} 時間未満なら、週の更新を待ちます。",
+    "paused": "一時停止中",
+    "{env} isn't a whole number of hours from 0 to 168, so a used-up week uses no reset by itself.": "{env} が 0 から 168 までの整数の時間数ではないため、週の枠を使い切ってもリセットは自動使用されません。",
+
     "MCP router": "MCP ルーター",
     "in {agents}": "{agents} で使用",
     "Browser access": "ブラウザからのアクセス",
@@ -12834,6 +12858,14 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
   },
   de: {
+    "when its week runs out and refresh is at least {hours} h ahead": "wenn die Woche aufgebraucht ist und die Erneuerung noch mindestens {hours} h entfernt ist",
+    "auto-used when the week runs out and refresh is at least {hours} h ahead": "automatisch eingelöst, wenn die Woche aufgebraucht ist und die Erneuerung noch mindestens {hours} h entfernt ist",
+    "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} löst einen Reset nur dann automatisch ein, wenn die Woche aufgebraucht ist und die Erneuerung noch mindestens {hours} h entfernt ist",
+    "{who} uses a reset by itself when its week runs out and refresh is at least {hours} h ahead, or before one expires": "{who} löst einen Reset automatisch ein, wenn die Woche aufgebraucht ist und die Erneuerung noch mindestens {hours} h entfernt ist, oder bevor einer abläuft",
+    "A week that renews in under {hours} h is waited out instead.": "Wird die Woche in weniger als {hours} h erneuert, wird stattdessen gewartet.",
+    "paused": "pausiert",
+    "{env} isn't a whole number of hours from 0 to 168, so a used-up week uses no reset by itself.": "{env} ist keine ganze Stundenzahl von 0 bis 168, daher löst eine aufgebrauchte Woche allein keinen Reset automatisch ein.",
+
     "MCP router": "MCP-Router",
     "in {agents}": "in {agents}",
     "Browser access": "Browserzugriff",

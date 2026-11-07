@@ -21,10 +21,10 @@ const quotas = [
     resets: { count: 3, until: later } },
 ];
 
-function serve(lang, posts) {
+function serve(lang, posts, policy = {}) {
   let off = [];
   const settings = () => ({ theme: "light", lang, tray: "panel", quotaLeft: false, currency: "usd", trayUsages: ["codex"], trayUsageEvery: 3,
-    codexAutoReset: ["me@example.com"], codexAutoResetOnly: { "me@example.com": "week" }, codexNoCredits: off });
+    codexAutoReset: ["me@example.com"], codexAutoResetOnly: { "me@example.com": "week" }, codexNoCredits: off, ...policy });
   return async (route) => {
     const req = route.request(), url = new URL(req.url());
     const json = (data) => route.fulfill({ json: data });
@@ -151,6 +151,30 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         }
         await ctx.close();
       }
+    });
+  }
+}
+
+for (const lang of Object.keys(words)) {
+  for (const value of [0, 24, "abc"]) {
+    test(`${process.env.BROWSER} ${lang}: folded weekly policy ${value}`, async (t) => {
+      const engine = process.env.BROWSER || "chromium";
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const page = await browser.newPage({ viewport: { width: 420, height: 800 }, reducedMotion: "reduce" });
+      const policy = value === "abc" ? { codexWeekResetMinHoursBad: "abc" } : { codexWeekResetMinHours: value };
+      await page.route("**/*", serve(lang, [], policy));
+      await page.goto("http://magpie.test/?mode=panel&view=usage");
+      await page.locator('#ptabs [data-ptab="usage"]').click();
+      await page.waitForFunction(() => !quotasLoading);
+      await page.locator(".pq-opts-fold").first().click();
+      await page.locator(".pq-opts-brief").waitFor();
+      const expected = await page.evaluate(({ lang, value }) => {
+        const say = (key) => (lang === "en" ? key : I18N[lang][key]).replaceAll("{hours}", "24");
+        return value === 24 ? say("when its week runs out and refresh is at least {hours} h ahead") : say("when its week runs out") + (value === "abc" ? " · " + say("paused") : "");
+      }, { lang, value });
+      assert((await page.locator(".pq-opts-brief").textContent()).includes(expected));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     });
   }
 }

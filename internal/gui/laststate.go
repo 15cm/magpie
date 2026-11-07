@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/yetone/magpie/internal/appdir"
-	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/steady"
 )
 
@@ -46,7 +45,7 @@ func lastStatePath() string { return filepath.Join(appdir.Cache(), "agents-state
 // (edit.WriteAtomic's would: every poll of the Agents page rebuilt each
 // agent's model list and picker, and every provider's catalog, anew).
 func keepState(s stateJSON) {
-	s.Settings = settings.Settings{}
+	s.Settings = stateSettingsJSON{}
 	// and what is told once: a notice, a file recovered after a crash
 	s.Notice, s.Connected, s.Recovered = "", nil, nil
 	b, err := json.Marshal(stateFile{Version: Version, State: s})
@@ -84,7 +83,7 @@ func lastKnown() (stateJSON, bool) {
 	if len(b) == 0 || json.Unmarshal(b, &f) != nil || f.Version != Version || f.State.Agents == nil {
 		return stateJSON{}, false
 	}
-	f.State.Settings = settings.Load()
+	f.State.Settings = currentStateSettings()
 	f.State.Last = true
 	return f.State, true
 }

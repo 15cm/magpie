@@ -1,3 +1,9 @@
+window.autoResetStatusWords = function (user, w, s = state?.settings) {
+  let key = w.week ? (w.expiring ? "{who} uses a reset by itself when its week runs out, or before one expires" : "{who} uses a reset by itself only when its week runs out") : w.expiring ? "{who} uses a reset by itself only before one expires" : "{who} no longer uses a reset by itself";
+  if (w.week && s?.codexWeekResetMinHours > 0 && !s?.codexWeekResetMinHoursBad) key = w.expiring ? "{who} uses a reset by itself when its week runs out and refresh is at least {hours} h ahead, or before one expires" : "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead";
+  return t(key, { who: user, hours: s?.codexWeekResetMinHours }) + (w.week && s?.codexWeekResetMinHoursBad ? " · " + t("paused") + autoResetWeekTitle(s) : "");
+};
+
 // Settings › Usage's Codex auto-use rows: each ChatGPT account's switches
 // and, under them, how early a reset about to expire is used. app.js
 // imports this when Settings draws them (renderAutoResetOwn), so it weighs
@@ -32,14 +38,14 @@ window.autoResetOwnPaint = function (s) {
     for (const c of AUTO_RESET_CASES) {
       const line = el("div", "ar-own-case");
       line.dataset.case = c.id;
-      const say = el("span", "ar-own-say", t(c.say));
-      say.title = t(was[c.id] ? c.on : c.off, resetLeadVars());
+      const say = el("span", "ar-own-say", autoResetSay(c, s));
+      say.title = autoResetCaseTitle(c, was[c.id], s);
       const pick = segs([["off", t("Off")], ["on", t("On")]], was[c.id] ? "on" : "off", async (v) => {
         try {
           prefs = await writingPrefs(api("settings/codex-auto-reset", { user, on: v === "on", when: c.id }));
           if (state) state.settings = prefs;
           const now = (prefs.codexAutoReset || []).includes(user.toLowerCase()) ? autoResetWhenOf(prefs.codexAutoResetOnly?.[user.toLowerCase()]) : { week: false, expiring: false };
-          status(autoResetStatus(user, now), "ok");
+          status(autoResetStatusWords(user, now, prefs), "ok");
           renderSettings();
           if (quotas) renderQuotas(); // the account's card says the same
         } catch (e) {
@@ -47,7 +53,7 @@ window.autoResetOwnPaint = function (s) {
           renderSettings();
         }
       });
-      pick.setAttribute("aria-label", t("Auto-use resets") + " · " + t(c.say) + " · " + user);
+      pick.setAttribute("aria-label", t("Auto-use resets") + " · " + autoResetSay(c, s) + " · " + user);
       line.append(say, pick);
       cases.append(line);
     }
