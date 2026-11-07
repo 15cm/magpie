@@ -8,3 +8,6 @@
 /magpie-dev.new
 /.direnv/
 /internal/update/launcher-*.com
+
+# Local skill for this checkout's private Magpie instance.
+/.agents/skills/magpie-service/
