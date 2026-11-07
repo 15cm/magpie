@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/proc"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 var machO = []byte{0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0}
@@ -313,7 +314,7 @@ func TestOpenInRex(t *testing.T) {
 	// the script, run as Rex runs it
 	dir := t.TempDir()
 	args := rexScript("cd " + shellQuote(dir) + " && echo ran > out")
-	t.Setenv("SHELL", "/usr/bin/true")
+	t.Setenv("SHELL", testenv.Tool(t, "true"))
 	if out, err := proc.Command(args[1], args[2:]...).CombinedOutput(); err != nil {
 		t.Fatalf("script: %v %s", err, out)
 	}
