@@ -50,9 +50,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // the state centred on the title's line, not sat low on its baseline
         // (the owner: "没有水平对齐")
         const off = await page.locator("#gateway .name").evaluate((n) => {
-          const r = document.createRange();
-          r.selectNodeContents(n.firstChild);
-          const a = r.getBoundingClientRect(), b = n.querySelector(".state").getBoundingClientRect();
+          // Compare line boxes: a text Range excludes the font's leading,
+          // which differs between the title and the smaller state.
+          const a = n.getBoundingClientRect(), b = n.querySelector(".state").getBoundingClientRect();
           return Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2);
         });
         assert(off <= 0.25, `the state's middle is ${off}px off the title's`);

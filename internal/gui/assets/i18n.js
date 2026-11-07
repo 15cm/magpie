@@ -9967,7 +9967,7 @@ const I18N = {
     "magpie signs out the accounts it keeps for {name}; adding it again signs in afresh": "magpie は {name} 用に保存しているアカウントからサインアウトします。再度追加するときは改めてサインインします",
     "{name} signed out": "{name} からサインアウトしました",
     "{agent} is signed in to {user} now: sign it in to another of its accounts first (Use on that account), then remove this one": "{agent} は現在 {user} でサインインしています。先に別のアカウントの「使用」で切り替えてから、このアカウントを削除してください",
-    "{agent} is signed in to {user}, the only account in magpie it can be signed in to, and magpie doesn't sign it out: add another account first, or sign out in {agent} itself, then remove this one": "{agent} は現在 {user} でサインインしています。これは magpie で {agent} がサインインできる唯一のアカウントで、magpie はサインアウトさせません。先に別のアカウントを追加するか、{agent} 自身でサインアウトしてから、このアカウントを削除してください",
+    "{agent} is signed in to {user}, the only account in magpie it can be signed in to, and magpie doesn't sign it out: add another account first, or sign out in {agent} itself, then remove this one": "{agent} は現在 {user} でサインインしています。これは magpie でサインインできる唯一のアカウントで、magpie はサインアウトさせません。先に別のアカウントを追加するか、{agent} 自身でサインアウトしてから、このアカウントを削除してください",
     "Signs Codex out of this account, as codex logout does": "codex logout と同じく、Codex をこのアカウントからサインアウトします",
     "{agent} is signed in to another of its accounts, and magpie forgets this one; the account itself is untouched": "{agent} を別のアカウントにサインインし直してから、magpie はこのアカウントを忘れます。アカウント自体はそのままです",
     "Codex itself is signed out too, as codex logout does.": "codex logout と同じく、Codex 自体もサインアウトします。",

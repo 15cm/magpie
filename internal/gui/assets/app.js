@@ -2510,8 +2510,9 @@ function cliTag(a) {
     v.title = t("The {agent} app {v}. It reads the same settings as the CLI: connecting {agent} here connects both", { agent: a.name, v: c.app });
     box.append(v);
   }
-  // only the Claude Code Desktop's Code tab runs (cybercaius, young02036)
+  // Only Desktop's Code tab (cybercaius, young02036)
   if (c.inDesktop) {
+    box.classList.add("in-desktop");
     const v = el("span", "ag-ver ag-app", t("In Claude Desktop"));
     v.title = (c.desktopVersion ? t("Claude Code {v}, included in Claude Desktop", { v: c.desktopVersion }) + "\n" : "")
       + t("No Claude Code of its own is installed here: Claude Desktop's Code tab runs this one, reading this {path}. Its Code sessions in WSL use the WSL card.", { path: a.path || "~/.claude/settings.json" });

@@ -16,6 +16,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
+const { reach } = require("./reader.cjs");
 
 const assets = path.resolve(__dirname, "../assets");
 // with no models in magpie (every Claude account kept to Claude Code,
@@ -163,9 +164,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // Codex, one account: its entry, with no toggle to offer
         const cx = page.locator(`${row("codex")} .ag-who`);
         assert.equal(await cx.locator(".v").textContent(), "me@example.com");
+        await reach(page, cx);
+        const codexTop = await scrolled();
         await cx.click();
         await menu.waitFor();
         assert.deepEqual(await menu.locator(".pm-item .pm-name").allTextContents(), ["me@example.com", await tr(K.manage)]);
+        assert.deepEqual(await scrolled(), codexTop, "opening Codex's account menu moved the page");
         await menu.locator(".pm-item", { hasText: await tr(K.manage) }).click();
         await page.waitForFunction(() => new URL(location.href).searchParams.get("edit") === "codex");
 
