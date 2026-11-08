@@ -9,5 +9,5 @@
 /.direnv/
 /internal/update/launcher-*.com
 
-# Local skill for this checkout's private Magpie instance.
-/.agents/skills/magpie-service/
+# Local agent skills, including private service and deployment procedures.
+/.agents/skills/
