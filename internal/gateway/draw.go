@@ -1311,6 +1311,8 @@ func accountRefusedDrawing(code int) bool {
 // draw asks the provider for d's images, on the API model draws on there,
 // and on the other when that one isn't served.
 func (s *Server) draw(ctx context.Context, p provider.Provider, model string, d drawing) (drawn, int, error) {
+	// the headers the user gave the image model
+	ctx = provider.WithModel(ctx, p.ID, model)
 	if drawsWorkBuddy(p) {
 		return s.drawWorkBuddy(ctx, p, model, d)
 	}
@@ -1393,6 +1395,7 @@ func (s *Server) sendWith(ctx context.Context, p provider.Provider, method, url,
 	if p.IsRemoteMagpie() {
 		req.Header.Set("User-Agent", "magpie/"+Version)
 		passOnCaller(ctx, req)
+		passOnUA(req, callerUA(ctx))
 	}
 	if sign {
 		if err := p.Sign(ctx, req, provider.Chat, body); err != nil {

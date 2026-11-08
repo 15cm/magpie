@@ -33,14 +33,13 @@ const providerUsage = `usage:
   magpie provider <id>                    show one provider and its models
   magpie provider add <preset> <key>      add a preset vendor   e.g. magpie provider add deepseek sk-…
                                           again, it adds another (deepseek-2); k=v pairs too: id, name, header.X-Foo
-  magpie provider add <name> k=v…         add a custom vendor   k: url, anthropic, responses, gemini, decide, key, models, catalog, icon, header.X-Foo, balance, balance.path, balance.method, balance.token, models.url, search, user-agent,
+  magpie provider add <name> k=v…         add a custom vendor   k: url, anthropic, responses, gemini, decide, key, models, catalog, icon, header.X-Foo, balance, balance.path, balance.method, balance.token, models.url, list, search, user-agent,
                                           access.key, access.secret (a Volcengine access key, or a Tencent Cloud SecretId and SecretKey, for its plan's windows)
   magpie provider set <id> k=v…           change a provider's settings, with the same k=v pairs as add;
                                           codex=as-sent sends Codex's Responses requests as Codex sent them
                                           (a relay that checks they are Codex's own), codex=default fits them;
-                                          user-agent=agent sends the User-Agent the agent gave (pi, opencode…)
-                                          in place of magpie's, for a plan that serves only agents it names;
-                                          user-agent=magpie, the default, sends magpie's;
+                                          user-agent=agent, the default, sends the User-Agent the agent gave
+                                          (pi, opencode…); user-agent=magpie sends magpie's in its place;
                                           compaction=native asks the provider Codex's own compaction and hands
                                           Codex its sealed item as it came (a Responses API, a ChatGPT account,
                                           Copilot), compaction=magpie, the default, has magpie summarise
@@ -99,6 +98,12 @@ const providerUsage = `usage:
                                           how much an API key may spend, in USD as the Usage page prices its calls,
                                           a day (the default), a month or in all from now: at it, routing takes the
                                           key for used up and goes on to the other keys and the fallbacks
+  magpie provider key-balance <id> [key [usd|¥cny|off] [--refill monthly[:day]|weekly[:mon…sun]|off] [--expiring amount@yyyy-mm-dd|off]… [--expiring-remove [amount@]yyyy-mm-dd]…]
+                                          the balance on an API key whose vendor tells none, typed from its own page
+                                          in USD or in yuan (¥100): the Usage page shows it less what magpie prices the
+                                          key's calls at since; with --refill it is whole again each month or week;
+                                          --expiring adds credit that counts through a day and is spent first
+                                          (each one a grant, the soonest spent first; off takes every one off)
   magpie provider account-weight <id> [account [n|default]]
                                           a subscription account's share of the requests with routing=weight:
                                           one weighing 3 takes three for each one weighing 1 takes (default 1)
@@ -151,6 +156,8 @@ const providerUsage = `usage:
                                    (a System One API, POST …/systemone: it routes groups, its models are never an agent's)
        magpie provider add anthropic sk-… id=anthropic-ws2 name="Anthropic WS2" header.anthropic-workspace-id=wrkspc_…
        magpie provider set my-relay models.url=https://relay.example.com/api/models catalog=
+       magpie provider set volcengine list=off models=ep-20261108-abcde
+                                   (its model list is never asked for: only the models given by id are served)
        magpie provider set my-relay search=yes
                                    (the relay answers Claude Code's WebSearch and Codex's web_search itself:
                                     those go to it as sent, not through magpie's own search)
@@ -643,6 +650,8 @@ func providerCmd(args []string) error {
 		return poolCmd(rest)
 	case "account-concurrency", "account-limit":
 		return accountConcurrencyCmd(rest)
+	case "key-balance", "key-balances":
+		return keyBalanceCmd(rest)
 	case "spend-cap", "spend-caps":
 		return spendCapCmd(rest)
 	case "account-weight", "account-weights":
@@ -827,7 +836,9 @@ func announce(id string) error {
 	fmt.Println(green.Render("✓"), "added", saved.Name, muted.Render("("+saved.ID+")"))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if ms, err := saved.Fetch(ctx); err == nil {
+	if saved.ListsOff() {
+		// its list is never asked for: the models given by id are its
+	} else if ms, err := saved.Fetch(ctx); err == nil {
 		fmt.Println(green.Render("✓"), len(ms), "models from", fetchedFrom(*saved))
 	} else if !saved.DecideOnly() {
 		// the URLs asked and what they said; the base stays as given
@@ -869,12 +880,8 @@ func showProvider(p provider.Provider) error {
 	if p.PassesErrors() {
 		kv("errors", "pass"+muted.Render("  sent to the agent as the vendor sent them, asked once"))
 	}
-	if p.PassUserAgent {
-		why := "  the User-Agent the agent gave, not magpie's"
-		if !p.PassesUserAgent() {
-			why = "  but magpie's: it goes as a client of " + p.Name + "'s own"
-		}
-		kv("user-agent", "agent's"+muted.Render(why))
+	if p.MagpieUserAgent {
+		kv("user-agent", "magpie's"+muted.Render("  not the one the agent gave"))
 	}
 	if p.Unredacted {
 		why := "  Settings' redaction leaves its requests as written"
@@ -1141,6 +1148,17 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			p.SecretAccessKey = v
 		case "models.url":
 			p.ModelsURL = v
+		case "list":
+			// off: the vendor's model list is never asked for, and only
+			// the models given by id are served (axelburks on Discord)
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "off", "no":
+				p.ListOff = true
+			case "on", "yes", "":
+				p.ListOff = false
+			default:
+				return fmt.Errorf("list=on|off, not %q", v)
+			}
 		case "codex":
 			// as-sent: Codex's requests go to it as Codex sent them, for
 			// a relay that checks they are Codex's own (#1758)
@@ -1218,9 +1236,8 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			}
 			p.PassErrors = on
 		case "user-agent", "ua":
-			// agent: a request goes with the User-Agent the agent that
-			// sent it gave, for a coding plan that serves only agents it
-			// names (#1851); magpie: magpie's own, as by default. A
+			// agent, the default: a request goes with the User-Agent the
+			// agent that sent it gave (#1851); magpie: magpie's own. A
 			// header.User-Agent the user set stands over both
 			var on bool
 			switch strings.ToLower(v) {
@@ -1233,7 +1250,8 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			if on && p.Account != nil {
 				return fmt.Errorf("%s signs in as its own client, which sends the User-Agent it does; user-agent= is for a provider with an API key", p.Name)
 			}
-			p.PassUserAgent = on
+			// an account goes as its own client either way
+			p.MagpieUserAgent = !on && p.Account == nil
 		case "search":
 			// yes: the vendor searches the web by itself, a web search a
 			// client offers going to it as it was sent (a relay in front of
@@ -1506,6 +1524,10 @@ func serve() error {
 		gateway.SetRestarter(follow.answer)
 		go follow.run(ctx)
 	}
+	// another magpie using this one updated (serve_update.go), and this
+	// one's own Remote magpies follow it
+	gateway.SetUpdater(serveUpdateAsked(follow))
+	go provider.KeepRemotesUpdated(ctx, version)
 	err := s.ListenAndServe(ctx)
 	if exe := follow.restartTo(); exe != "" {
 		// the plugin hosts end, waited for, first, as magpie web's

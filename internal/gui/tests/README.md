@@ -666,7 +666,7 @@ and WebKit, at 1280px, 640px and 420px, with no sideways scroll.
 `name-suffix-where-named.test.cjs` checks the setting that says whether a
 provider's name or "· routing group" follows a name in the agents' lists (#868)
 where names are given, in Chromium and WebKit, English and Chinese. The
-provider editor's Names, prices & levels has its three choices and says what the lists
+provider editor's Model settings has its three choices and says what the lists
 show. For the groups it is one setting for all of them, so it sits under the
 list on the Routing groups page (PAMI on Discord: in one group's editor it read
 as that group's): a group's editor has no choices, only what its group will be
@@ -1531,7 +1531,7 @@ Chromium and WebKit, English and Chinese: Detect APIs' "Each picked model"
 posts provider/detect with every model picked (detectModels) and shows model
 by API, each a ✓ with the time or a ✗ with why; "Use these" sets the URLs
 that answered and gives each model that answered on one API only that API in
-Names, prices & levels, unsaved, sending nothing until the Save carries them as
+Model settings, unsaved, sending nothing until the Save carries them as
 modelPrefs, while a model answering on two stays Auto. A chip's right-click
 Test says the API it was asked on ("answered via Responses"). No click moves
 the page, nothing has a left-border accent, and every string has its
@@ -1962,7 +1962,11 @@ the OpenAI/Anthropic switch keeps that host and doesn't move the page. Opened
 at localhost, the container's address stays and the row says it is the
 container's own and to set `MAGPIE_PUBLIC_URL`. Outside a container nothing
 changes. No coloured left border; English and Chinese, Chromium and WebKit,
-with `/api/plugins` faked.
+with `/api/plugins` faked. With `MAGPIE_PUBLIC_URL` at the NAS's private
+192.168.31.218 (jiezhengj on Discord), the Gateway page's list, Connect's
+menu and About name it the local network's, not "Public address", and the
+Docker bridge's 172.17.0.1 other containers'; an internet address is named
+the internet's. Every language, at 1100 and 420 wide.
 
 `routing-time.test.cjs` checks a routing group's rule for hours of the day
 (Discord: send a provider's peak-price hours, DeepSeek's or GLM's, to
@@ -2114,7 +2118,7 @@ with nothing shared), and a network address that needs an enabled gateway
 key. English and Chinese, Chromium and WebKit, with `/api/plugins` faked.
 
 `public-url-default.test.cjs` checks that Connect starts at MAGPIE_PUBLIC_URL,
-labelled Public address, with the snippets on it, until an address is
+labelled Public address (对外地址) when it is a name, with the snippets on it, until an address is
 picked, and that a pick (this computer's) is kept after a reload (#1551).
 About shows the public URL beside the local one; magpie web shows it as the
 gateway's address and the MCP server's, the app keeps those local. Without

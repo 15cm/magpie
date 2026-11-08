@@ -178,13 +178,41 @@ async function loadUsage(asked) {
   if (usageTab === "sessions") return loadSessions();
   if (usageTab === "requests") return loadLedger(asked && ledger && ledgerWant === ledParams({ offset: ledOffset, limit: LED_PAGE }) ? "open" : false);
   if (usageTab === "context") return window.loadContext?.();
+  // the figures on hand are this period's: opened again (its tab pressed
+  // while on it, the Overview's tab) they stay, and are read again behind
+  // them as the timer reads them, so the page neither empties nor moves
+  // (jiabubu on Discord)
+  if (asked && usage && usageFor === usageKey() && !$("#view-usage").classList.contains("loading")) return refreshUsage();
   renderUsageLoading();
   if (!asked) loadQuotas();
-  const p = period, read = ++usageRead;
+  const p = period, k = usageKey(), read = ++usageRead;
   const next = await api("usage?period=" + encodeURIComponent(p) + usageZoneQ());
   if (read !== usageRead || view !== "usage" || usageTab !== "usage" || period !== p) return;
-  usage = next;
+  usage = next; usageFor = k;
   renderUsage();
+}
+// usageFor: the period and zone the figures on hand (usage) were read for
+let usageFor = "";
+const usageKey = () => period + usageZoneQ();
+// A read past a moment shows as one: the refresh turns (on the Overview each
+// card's with it), and nothing on the page is taken out (jiabubu on Discord)
+const readingN = new WeakMap();
+function usageReading(p, box) {
+  let on = false;
+  const tm = setTimeout(() => { on = true; readingN.set(box, (readingN.get(box) || 0) + 1); box.classList.add("reading"); }, 200);
+  const done = () => {
+    clearTimeout(tm);
+    if (!on) return;
+    const n = readingN.get(box) - 1;
+    readingN.set(box, n);
+    if (!n) box.classList.remove("reading");
+  };
+  p.then(done, done);
+}
+// the allowances' whole read (loadQuotas, app.js)
+function quotaReading(p) {
+  const b = $("#subscriptionUsage");
+  if (b) usageReading(p, b);
 }
 
 // the period picker, in the page's head, for the Overview and Requests
@@ -429,7 +457,7 @@ function costHead(c, note, title) {
 // a request magpie sent a provider by itself to test it (SourceProbe)
 const probeWhy = () => t("magpie sent this itself to test the provider (Test, Detect APIs or a model list), not for an agent. It is not counted in any total.");
 const unpricedCalls = (n) => t(n === 1 ? "{n} call unpriced" : "{n} calls unpriced", { n: ledNum(n) });
-const unpricedCallsWhy = (n) => n ? t(n === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n }) : t("Estimated at effective model prices. A model's price at one provider is set in that provider's Names, prices & levels and counts over its list price");
+const unpricedCallsWhy = (n) => n ? t(n === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n }) : t("Estimated at effective model prices. A model's price at one provider is set in that provider's Model settings and counts over its list price");
 // renderCosts redraws whatever on the Usage page shows a cost, once the
 // currency changes — the numbers alone, not the page around them, so a
 // click on the setting never moves anything it isn't showing (#212)
@@ -729,6 +757,7 @@ function renderUsage() {
   const total = Math.max(1, usageTokens(u));
   const list = (id, groups, act) => {
     const box = typeof id === "string" ? $("#" + id) : id;
+    keepIcons(box); // a logo made again blinks (keepIcons)
     box.replaceChildren();
     for (const g of groups) {
       const r = el("div", "row stat");
@@ -780,6 +809,7 @@ function renderUsage() {
       if (act) act(r, g);
       box.append(r);
     }
+    keptIcons = null;
   };
   // a client hidden from the Agents list (ikunbots on X: curl,
   // Go-http-client, python-httpx beside the agents in use) is left out of
@@ -3306,7 +3336,7 @@ function renderSessions() {
   const active = sessModel ? null : acts.filter((a) => byAgent(a) && byFolder(a)).reduce((n, a) => n + a.seconds, 0);
 
   const c = tot.cost ? fmtCost(tot) : "";
-  const unpricedNote = tot.unpriced ? t("Not counted: {models}, with no known price", { models: sessModelNames([...unpriced]) }) : t("Estimated at effective model prices. A model's price at one provider is set in that provider's Names, prices & levels and counts over its list price");
+  const unpricedNote = tot.unpriced ? t("Not counted: {models}, with no known price", { models: sessModelNames([...unpriced]) }) : t("Estimated at effective model prices. A model's price at one provider is set in that provider's Model settings and counts over its list price");
   // a session's models are counted, not its calls: the agents' files price by model
   const unpricedModels = tot.unpriced ? t(tot.unpriced === 1 ? "{n} model unpriced" : "{n} models unpriced", { n: tot.unpriced }) : "";
   costHead(c, unpricedModels, unpricedNote);
@@ -4238,9 +4268,10 @@ function refreshUsage(now = false) {
         if (want) { quotasAsked = performance.now(); q = loadQuotas("all"); }
         else if (usage && performance.now() - quotasAsked > 60e3) { quotasAsked = performance.now(); loadQuotas(); }
         if (usage) {
-          const p = period, read = ++usageRead;
+          const p = period, k = usageKey(), read = ++usageRead;
           const u = await api("usage?period=" + encodeURIComponent(p) + usageZoneQ());
           if (read === usageRead && view === "usage" && usageTab === "usage" && p === period) {
+            usageFor = k;
             if (JSON.stringify(u) !== JSON.stringify(usage)) { usage = u; renderUsage(); }
             // this read claimed the newest one: a pick it superseded had put the
             // skeleton up, and the figures on hand are what ends it
@@ -4263,6 +4294,7 @@ function refreshUsage(now = false) {
     return refreshUsage(want);
   });
   usageFlight = flight;
+  usageReading(flight, $("#usageReload"));
   return flight;
 }
 renderUsageEvery();

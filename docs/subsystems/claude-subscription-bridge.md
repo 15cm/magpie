@@ -181,19 +181,29 @@ talks to it as it talks to `-p`: stream-json in and out. The helper:
   base64 image is written to `image-N.<ext>` (0600) in a
   `magpie-claude-images-*` temp folder, and its path is pasted alone,
   which Claude Code reads into the message as `[Image #N]` (a path inside
-  other words stays words). Claude Code reads the file after the paste
-  returns, so the helper waits for `[Image #N]` with N past the last
-  before pasting the next piece; without that wait the second of two
-  images was lost. The transcript holds real image blocks, and Claude Code
-  notes each one's path to the model (`[Image: source: …]`). The folder
-  is removed once its message is sent (Claude Code has read the files
-  by then), and when the helper ends, on SIGINT, SIGTERM and SIGHUP too:
-  magpie's own handler (`endProbesOnSignal`) let go of the signals for
-  this command (`leaveSignals`), since it re-raised SIGTERM and killed the
-  helper before it could end Claude Code and remove its files. Windows
-  ends a run by killing its job, which no handler hears, so a helper
-  starting removes such folders, and the tap's, over an hour old
-  (`dropLeft`);
+  other words stays words). Each piece is pasted once the prompt shows
+  the one before (`send`). Claude Code reads an image's file after the
+  paste returns, so the helper waits for `[Image #N]` with N past the
+  paste before; without that wait the second of two images was lost.
+  Words with a line that ends naming an image file (`a.jpg` in an `ls`)
+  are tried as that file first (2.1.318 asks the clipboard for it, about
+  0.45s) and taken in after, and Claude Code keeps one mark of a paste
+  being taken in for every paste: an image pasted meanwhile cleared it,
+  and Enter sent the message without the words, which came in the next
+  prompt (#5548). So words are waited for too, until their last words
+  show or a `[Pasted text #N` with N past the paste before (`shown`):
+  images and pasted text are numbered together, and the prompt drawn
+  again shows the earlier ones (`TestShimWaitsForWordsNamingImages`,
+  `TestShimPastesImages`). The transcript holds real image blocks, and
+  Claude Code notes each one's path to the model (`[Image: source: …]`).
+  The folder is removed once its message is sent (Claude Code has read
+  the files by then), and when the helper ends, on SIGINT, SIGTERM and
+  SIGHUP too: magpie's own handler (`endProbesOnSignal`) let go of the
+  signals for this command (`leaveSignals`), since it re-raised SIGTERM
+  and killed the helper before it could end Claude Code and remove its
+  files. Windows ends a run by killing its job, which no handler hears,
+  so a helper starting removes such folders, and the tap's, over an hour
+  old (`dropLeft`);
 - tails `<CLAUDE_CONFIG_DIR>/projects/*/<session>.jsonl` and tells each
   row as `-p` would (`translator`): assistant messages whole, a tool's
   result, a `<synthetic>` API error as the turn's error result with its
@@ -378,6 +388,29 @@ turn whose reply had begun, and Off are never asked again
 (`thirdPartyRefused` says why). Settings' own value is not changed.
 `claude_tui_refusal_test.go` holds each case.
 
+The other exception is Claude Code's auto mode classifier when its own
+cache marks keep a long transcript (#5585, #5655; `keptByPrint`,
+`claudePrint` code `cache-marks`). The classifier is asked afresh each
+call: its system, the user's CLAUDE.md, the transcript so far with its
+marks moved on to the newest entry, and the action to judge. Pasted into a
+new interactive run, it loses those marks: Claude Code marks only the last
+block of what it is pasted, and the classifier's tail changes every call,
+so each call read only Claude Code's own prompt (about 69K tokens) and
+wrote the whole transcript again, 126K and 132K a call at an hour's 2x
+in iamnil's rows. A `-p` run keeps the client's marks (below), so a call
+reads what the call before wrote and writes only what is new. `-p` is
+counted at about twice the allowance a token, so it is chosen only past
+`marksPrintAt`, 64KB of message text before the last mark: with S Claude
+Code's prompt, M the marked transcript and D the new part, the interactive
+call costs about 0.1·S + 2·M and the `-p` one about 2·(0.1·(S+M) + 2·D),
+which meet at M ≈ 15–20K tokens. A shorter classifier, and every other
+request, stays interactive; a conversation's later turns go on in their
+run, which keeps its own cache, so none of them is moved. Desktop's
+classifier, which sends no `X-Magpie-Cache-Marks` header, is parsed for
+its marks with the interactive mode on only for this
+(`serveSubscriptionAs`). `TestClaudeTUIClassifierKeepsLongMarksAsPrint`
+holds it, with and without the header.
+
 A JSON schema is answered through an answer tool of magpie's
 (`claude_tui_schema.go`): interactive Claude Code takes `--json-schema`
 and does nothing with it (2.1.316, a real run: its result's
@@ -404,7 +437,8 @@ a new Claude Code (one older than its session, or a client's own) can
 run to megabytes. A real 3MB paste showed `[Pasted text` after 35s, and
 a real 500KB one was answered with all of it in the transcript, so the
 helper waits for a paste a second per 64KB longer than `pasteWait`
-(`shownWait`) before its Enter. Until 11-01 words over 400KB were
+(`shownWait`) before the next piece or its Enter, and goes on when it
+still isn't shown. Until 11-01 words over 400KB were
 refused with a 502 (`big`), a bound no paste had been tried at.
 
 An image known only by its URL is downloaded first
@@ -459,7 +493,8 @@ still restarts. The `-p` run takes every change in place
 helper pastes the words without their marks, so the run keeps Claude
 Code's own prompt caching (no `DISABLE_PROMPT_CACHING`, no client tail)
 and the reply reports every client mark as dropped
-(`clientCache.pasted`; see
+(`clientCache.pasted`), except a long classifier's, which runs as `-p`
+for them (`keptByPrint`, above; see
 [Client-placed cache marks](#client-placed-cache-marks-1717)).
 
 The gateway's log says which (`claude: not the interactive mode: …`).
@@ -646,6 +681,20 @@ as the helper waited, and every try was answered 502 "Claude Code has
 not answered magpie's initialize request in 10s" (#4504). A helper that
 answers nothing even then is ended (`tuiNoStart`), and the turn fails
 saying the interactive mode didn't start; the next turn tries it again.
+So does a helper that ends saying why Claude Code didn't come up ("claude-tui:
+…"), unless Claude Code ended itself first (`claudetui.EndedEarly`, as one
+that can't load its session does): a new Claude Code told the whole
+conversation waits on the same thing, and the turn was answered 502 after
+twice 45s (sowhynot). `TestClaudeTUINoPromptNotTriedAgain` holds both.
+A Claude Code that drew nothing in that time (0 bytes read) is said with
+what it runs meanwhile, from `ps` (`undrawn`, macOS and Linux): its
+Keychain read of its sign-in, `security find-generic-password`, has no
+time limit in Claude Code, and one held by a Keychain window or a locked
+keychain is named with what to do; any other command is named by its
+program alone, never its arguments. The helper doesn't end early on 0
+bytes: a Keychain window may still be answered, and Claude Code bounds its
+own network waits (about 30s) before it draws.
+`TestShimSaysWhatAnUndrawnClaudeWaitsOn` holds it.
 
 ## Why turns go on in one run
 
@@ -655,7 +704,7 @@ conversation is written to the cache again and its images are sent again.
 By default, that message holds the history in blocks of `historyChunk`
 messages, and magpie's one mark (Claude Code keeps three of Anthropic's four) is on the
 last whole block, else on the caller's instructions: a later run started
-anew for the same conversation within the hour reads the history up to an
+anew for the same conversation while it is cached reads the history up to an
 earlier run's mark, found within Anthropic's 20-block lookback. A
 conversation with no history (no reply that calls no tool, as a sub-agent's
 loop of tool calls that Claude Code's AgentSummary asks a summary of) has
@@ -665,13 +714,79 @@ A turn that goes on in the run that had the last one is told only the
 messages since (`renderClaudeTurn`), and Anthropic reads the rest from the
 cache.
 
+A run keeps its prompt cache as long as the user picked for Claude Code's
+main conversation (`claudeRunTTL`): `FORCE_PROMPT_CACHING_5M`, then
+`CLAUDE_CODE_PROMPT_CACHE_TTL`, in magpie's environment or settings.json's
+`env`, then settings.json's `promptCacheTtl` (the Agents page's "Prompt
+cache · main conversation"), and an hour with none of them, as Claude Code
+writes it on a subscription within its limits. The run is given it as
+`CLAUDE_CODE_PROMPT_CACHE_TTL` (`cleanClaudeEnvTTL`; a saved account's
+Claude Code reads its own folder's settings, not the user's), and magpie's
+mark in the first message is as long (`Request.runMark`), since Anthropic
+refuses a 1h mark after a 5m one. A session a run goes on from keeps the
+lifetime it started with (`cachePrefix.ttl`; one saved before it was kept
+is an hour's). Until 11-07 every run was given 1h whatever the pick
+(linkaww). `TestClaudeRunKeepsTheUsersCacheTTL`. Every `savedSession`
+carries its run's `cachePrefix`: the shelf's (`shelve`), and the branches
+cut from a live run's session for a fork's turn (`branch`), a turn sent
+again while its run is busy (`retryBranch`) and the turn after the
+interactive mode's side question (`branchAt`). Up to v0.1.3266 the three
+branches carried none, and their runs went back to an hour under a 5m
+pick (linkaww); `everyRunKept5m` in the fork, busy-retry and side
+question tests.
+
+A new run (and one started from a transcript, `replaySession`) picks its
+lifetime with `runTTLFor`:
+
+- `FORCE_PROMPT_CACHING_5M` on this computer gives 5m, as Claude Code
+  does.
+- A request whose marks name an hour (`askedCacheTTL`,
+  `Request.askedTTL`: the longest TTL marked on its tools, system,
+  messages or the request itself) gets an hour: its client picked it.
+- Else the pick of the user of the computer the request's Claude Code
+  runs on (`Request.pickedTTL`, `claudeTTLOf`). For Claude Code on this
+  computer (its token or `claude-cli/` User-Agent from loopback,
+  `caller.claudeHere`), it is this computer's, read as `claudeRunTTL`
+  reads it. For a request another magpie passed on, it is what that
+  magpie named in `X-Magpie-Claude-Cache-TTL` (`ClaudeCacheTTLHeader`):
+  `5m`, `1h`, or `default` for no pick. `passOnCaller` sends it on every
+  request to a Remote magpie whose caller is Claude Code here, or that
+  came with it. `callerFrom` takes it from a `magpie/` request alone, and
+  `withCaller` takes it off what comes in, so no vendor is sent it.
+  `default` gives `claudeRunTTL`: this computer's own pick, or an hour,
+  as Claude Code keeps it on a subscription.
+- Else the marks decide, five minutes for a mark with no ttl.
+- Else `claudeRunTTL`.
+
+Claude Code marks five minutes with no ttl, whether its user picked them
+or it is its default off a subscription (2.1.316: the marker names a ttl
+only for an hour). So marks can't tell a 5m pick from no pick, and an
+unmarked side call (Haiku's title, the classifier) says nothing at all.
+Up to v0.1.3255 a remote relay wrote an hour's cache for a Mac set to 5m
+(Linka). From v0.1.3256 the marks decided, so with nothing picked every
+relayed write was five minutes, while a 5m pick still had its unmarked
+side calls written for an hour (linkaww). The header carries the pick
+itself. A settings.json that can't be read or parsed names no pick
+(`claudeSettingsKnown`), and the marks decide as before. Not seen by
+magpie: a pick made only in the shell Claude Code was started from, or
+in a project's `.claude/settings.json`. Such a client is sent `default`,
+an hour, unless its marks name an hour. A Claude Code that goes straight
+to a remote magpie, with no magpie of its own, sends no header, and its
+marks decide as before. Chat and Responses requests carry no marks and
+keep `claudeRunTTL`; warmup and usage runs have no request and keep it
+too (`cleanClaudeEnv`). `TestAskedCacheTTL`,
+`TestClaudeRunKeepsTheUsersCacheTTL`, `TestClaudeCacheTTLFromAMagpieOnly`,
+`TestClaudeCacheTTLOf`, `TestClaudeCacheTTLReachesTheRemoteMagpie`.
+
 ## Client-placed cache marks (#1717)
 
 A client can send `X-Magpie-Cache-Marks: client` on a `/v1/messages`
 request to a Claude subscription. Without that header, the bridge behaves
 as before — except Claude Code's auto mode classifier, whose own marks are
 kept like an opted-in client's when they are valid, and dropped as before when
-they are not (#3835). Chat Completions and Responses
+they are not (#3835). With the interactive mode on, the classifier's marks
+are kept only when they keep `marksPrintAt` of transcript, and its run is
+then `-p` (#5585). Chat Completions and Responses
 ignore the header. The mode is
 part of the run's identity, including rewritten conversations and tool-result
 handoffs: opted-in and ordinary requests never share a run.
@@ -679,8 +794,9 @@ handoffs: opted-in and ordinary requests never share a run.
 An opted-in `-p` run sets `DISABLE_PROMPT_CACHING=1`. Its four cache slots
 belong to the client. An interactive run is pasted the words without their
 marks, so it keeps Claude Code's own caching and reports the system, message
-and tail marks dropped beside the tools' (`clientCache.pasted`); the table
-below is the `-p` run's. `claude_cache.go` validates the marks before run selection;
+and tail marks dropped beside the tools' (`clientCache.pasted`); a
+classifier whose marks keep a long transcript runs as `-p` instead
+(`keptByPrint`). The table below is the `-p` run's. `claude_cache.go` validates the marks before run selection;
 `renderClaudePrompt` places them in a new run's first user message.
 
 | Client mark | Bridge behavior |
