@@ -4,6 +4,9 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "View routing": "查看路由",
+    "No session ID": "未提供会话标识",
+    "Use the library's": "用资源库的",
     "when its week runs out and refresh is at least {hours} h ahead": "周额度用完且距离刷新至少 {hours} 小时时",
     "auto-used when the week runs out and refresh is at least {hours} h ahead": "周额度用完且距离刷新至少 {hours} 小时时自动使用",
     "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} 仅在周额度用完且距离刷新至少 {hours} 小时时自动使用重置卡",
@@ -4754,6 +4757,9 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
   },
   "zh-TW": {
+    "View routing": "檢視路由",
+    "No session ID": "未提供會話標識",
+    "Use the library's": "用資源庫的",
     "when its week runs out and refresh is at least {hours} h ahead": "週額度用完且距離刷新至少 {hours} 小時時",
     "auto-used when the week runs out and refresh is at least {hours} h ahead": "週額度用完且距離刷新至少 {hours} 小時時自動使用",
     "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} 僅在週額度用完且距離刷新至少 {hours} 小時時自動使用重置卡",
@@ -9489,6 +9495,9 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
   },
   ja: {
+    "View routing": "ルーティングを表示",
+    "No session ID": "セッション ID なし",
+    "Use the library's": "ライブラリのものを使う",
     "when its week runs out and refresh is at least {hours} h ahead": "週の枠を使い切り、更新まで {hours} 時間以上あるとき",
     "auto-used when the week runs out and refresh is at least {hours} h ahead": "週の枠を使い切り、更新まで {hours} 時間以上あるときに自動使用",
     "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} は週の枠を使い切り、更新まで {hours} 時間以上あるときだけリセットを自動使用します",
@@ -14226,6 +14235,9 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
   },
   de: {
+    "View routing": "Weiterleitung anzeigen",
+    "No session ID": "Keine Sitzungs-ID",
+    "Use the library's": "Den der Bibliothek verwenden",
     "when its week runs out and refresh is at least {hours} h ahead": "wenn die Woche aufgebraucht ist und die Erneuerung noch mindestens {hours} h entfernt ist",
     "auto-used when the week runs out and refresh is at least {hours} h ahead": "automatisch eingelöst, wenn die Woche aufgebraucht ist und die Erneuerung noch mindestens {hours} h entfernt ist",
     "{who} uses a reset by itself only when its week runs out and refresh is at least {hours} h ahead": "{who} löst einen Reset nur dann automatisch ein, wenn die Woche aufgebraucht ist und die Erneuerung noch mindestens {hours} h entfernt ist",
