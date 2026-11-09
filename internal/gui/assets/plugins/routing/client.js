@@ -983,6 +983,7 @@ function routingPage(part) {
     if (!weighedWith(r, x).includes(f) || memberSplit(r, f, x)) return null;
     if (["session", "turn", "cache"].includes(r.affinity?.why)) return "kept";
     if (r.sealedTask || ruleWhy(r, true) || f.learns || !f.known || group(f) !== "fine" || f.useFirst && !x.useFirst) return null;
+    if (x.backup && !f.backup) return "backup";
     const { c, k, lapse } = cmpRenews(f, x);
     return c >= 0 ? null : lapse || expiresAt(f, k) ? "expires" : "sooner";
   }
@@ -1067,6 +1068,10 @@ function routingPage(part) {
       if (x.creditsLast && f0 && !f0.creditsLast) {
         // behind everything not on its credits, as the user set it
         out.push(t("{who} has used up its allowance and goes on on its credits, which it is set to spend only after everything else: it is tried after every other account, key and fallback.", { who: who(x) }));
+        continue;
+      }
+      if (x.backup && f0 && !f0.backup && !x.rest && !x.sunk) {
+        out.push(t("{who} is kept as a backup while primary accounts have quota to spare.", { who: who(x) }));
         continue;
       }
       const by = !x.rest && !x.sunk && f0 ? memberSplit(r, f0, x) : null;
@@ -2924,6 +2929,7 @@ function routingPage(part) {
           : tiered(w) && group(w) === "spent" ? quota(w, "{n} used · all but used up", "{n} left · all but used up")
           : tiered(w) && group(w) === "low" ? quota(w, "{n} used · kept for last", "{n} left · kept for last")
           : (b = behindWhy(r, w)) === "kept" ? quota(w, "{n} used · conversation kept on another", "{n} left · conversation kept on another")
+          : b === "backup" ? quota(w, "{n} used · kept as backup", "{n} left · kept as backup")
           : b === "sooner" && soon ? quota(w, "{n} used · renews in {d} · one renewing sooner goes first", "{n} left · renews in {d} · one renewing sooner goes first", { d: dur(soon - n) })
           : b === "expires" && soon ? quota(w, "{n} used · renews in {d} · one whose credits expire sooner goes first", "{n} left · renews in {d} · one whose credits expire sooner goes first", { d: dur(soon - n) })
           : soon ? quota(w, "{n} used · renews in {d}", "{n} left · renews in {d}", { d: dur(soon - n) }) : quota(w, "{n} used", "{n} left");

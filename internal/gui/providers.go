@@ -169,7 +169,9 @@ type providerJSON struct {
 	AccountProxies map[string]string `json:"accountProxies,omitempty"`
 	// the models each account or key the user narrowed serves alone, by
 	// its name in lower case or its key's id (#474); the others serve all
-	AccountModels map[string][]string `json:"accountModels,omitempty"`
+	AccountModels    map[string][]string `json:"accountModels,omitempty"`
+	BackupNoFiveHour bool                `json:"backupNoFiveHour,omitempty"`
+	AccountBackup    map[string]string   `json:"accountBackup,omitempty"`
 	// the usage cap each account the user capped is held at, in percent
 	// of its windows, by its name in lower case (provider.AccountCaps)
 	AccountCaps map[string]int `json:"accountCaps,omitempty"`
@@ -764,6 +766,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		ID: p.ID, Name: p.Name, Icon: p.Icon, IconFrom: p.IconFrom, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
+		BackupNoFiveHour: p.BackupNoFiveHour, AccountBackup: p.AccountBackup,
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), HTTP1: p.HTTP1, LimitRestOff: p.LimitRestOff, ImageFilesOff: p.ImageFilesOff, TakesImageFiles: p.TakesImageFiles(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: !p.MagpieUserAgent, OwnClient: p.OwnClient(), PassErrors: p.PassErrors, TakesPassErrors: p.TakesPassErrors(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL, ListOff: p.ListsOff(), TakesListOff: p.Account == nil && !p.IsPlugin() && !p.DecideOnly(), TakesModelHeaders: p.Account == nil, DecideAPIKind: p.DecideAPIKind(),
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
 		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, UseFirst: p.UseFirst, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
@@ -1652,6 +1655,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// the provider's (#474)
 			Account string   `json:"account"`
 			Allow   []string `json:"allow"`
+			Backup  string   `json:"backup"`
 			// Cap, for accountcap: the share (1–99) of its windows the
 			// account is used to at most, 0 for no cap; for windowcap, the
 			// share of Window alone (1–99, 100 for none on it), 0 to have
@@ -2085,6 +2089,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				// accountmodels
 				if old != nil {
 					in.AccountModels, in.AccountModelsAll = old.AccountModels, old.AccountModelsAll
+					in.BackupNoFiveHour, in.AccountBackup = old.BackupNoFiveHour, old.AccountBackup
 				}
 				// and their usage caps, with accountcap and windowcap, their
 				// limits on requests at once, with accountconcurrency, and
@@ -2343,6 +2348,21 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				return
 			}
 			agent.SyncCatalogSoon()
+		case "accountbackup":
+			mode, err := provider.ParseAccountBackup(req.Backup)
+			if err != nil {
+				fail(rw, err)
+				return
+			}
+			if err := provider.SetAccountBackup(in.ID, req.Account, mode); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "backupnofivehour":
+			if err := provider.SetBackupNoFiveHour(in.ID, in.BackupNoFiveHour); err != nil {
+				fail(rw, err)
+				return
+			}
 		case "accountmodels":
 			if err := provider.SetAccountModels(in.ID, req.Account, req.Allow); err != nil {
 				fail(rw, err)
@@ -2741,7 +2761,13 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		defer cancel()
 		// and each account's daily check-in, for its row's Check in now
 		agent := r.URL.Query().Get("agent")
-		writeJSON(rw, provider.LoginCheckins(agent, provider.WithCapped(provider.LoginUsage(ctx, agent))))
+		qs := provider.LoginCheckins(agent, provider.WithCapped(provider.LoginUsage(ctx, agent)))
+		p, err := provider.Find(agent)
+		if err != nil || !p.BackupNoFiveHour {
+			writeJSON(rw, qs)
+			return
+		}
+		writeJSON(rw, accountBackupUsage(*p, qs, provider.Allowances(agent), time.Now()))
 	})
 	// Switching the account an agent is signed in to, among those magpie
 	// remembers, and forgetting one.
@@ -3277,4 +3303,21 @@ func fetchedCount(p provider.Provider, ids int) int {
 		return n
 	}
 	return ids
+}
+
+// accountBackupQuota adds configured automatic eligibility to the editor's
+// existing quota JSON. Routing traces decide the requested model's live tier,
+// including promotion; this hint deliberately does not claim that live tier.
+type accountBackupQuota struct {
+	provider.SubscriptionQuota
+	ConfiguredAutoBackup bool `json:"configuredAutoBackup,omitempty"`
+}
+
+func accountBackupUsage(p provider.Provider, qs map[string]provider.SubscriptionQuota, allowances map[string]provider.Allowance, now time.Time) map[string]accountBackupQuota {
+	out := make(map[string]accountBackupQuota, len(qs))
+	for user, q := range qs {
+		a, known := allowances[user]
+		out[user] = accountBackupQuota{SubscriptionQuota: q, ConfiguredAutoBackup: p.BackupNoFiveHour && known && a.LacksShortWindow("", now)}
+	}
+	return out
 }

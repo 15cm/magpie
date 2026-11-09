@@ -13225,10 +13225,7 @@ function keptLogin(p) {
   return (a.logins || []).find((l) => (l.user || "").toLowerCase() === as)?.user || "";
 }
 
-// loginsInOrder: an agent's accounts as its provider lists them and the
-// gateway tries them, the one it is signed in to first — unless it is
-// kept signed in to one of the user's choosing (p given), when the order
-// is the accounts' own
+// Account order follows the active sign-in unless KeepLoginAs sets it apart.
 function loginsInOrder(a, p) {
   const ls = a.logins?.length ? [...a.logins] : [{ user: a.user, plan: a.plan, active: true, on: true }];
   if (p && keptLogin(p)) return ls;
@@ -13297,20 +13294,20 @@ function renderAccounts(a, p) {
     row.append(line);
     line.append(dot, accountNameButton(p, l.user), el("span", "plan", accountPlan({ agent: a.agent, builtin: a.builtin, plan: l.plan })));
     if (p && on && several) line.append(keyWeight(p, { name: l.user }, wOf(l), weights, "provider/accountweight", { id: p.id, account: l.user }));
-    // its own models (#474), when there is another account to send the rest to
+    // Own models (#474).
     const [amPill, amBox] = ls.length > 1 || accountModelsOf(p, l.user).length ? accountModels(p, l.user, false, l.user) : [];
-    // what is set shows on it; the rest waits under ⋯ on a line below
+    // Unset controls wait under ⋯.
     const tools = el("div", "acc-tools");
     const pill = (x) => (x.classList.contains("set") ? line : tools).append(x);
     if (amPill) pill(amPill);
-    // its usage cap: the share of each window it is used to at most
+    // Usage cap.
     const cap = accountCapOf(p, l.user);
     // alone, the cap holds back only magpie's (𝕏 on Discord)
     const direct = l.active && !several && (a.agent === "claude" || a.agent === "codex") ? a.agentName : "";
     if (p) pill(accountCapPill(p, l.user, cap, direct));
     // and each window's own, set on its meter (willz on Discord)
     const capFor = (w) => windowCapOf(p, l.user, w);
-    // how many requests it has out at once, and waiting (#892)
+    // Lane limit (#892).
     if (p) pill(laneLimitPill(p, l.user, p.id + "@" + String(l.user).toLowerCase(), l.user));
     // its credits, as on its Usage card (jojonas_xyz on X)
     if (a.agent === "codex" && !sub?.plugin && !unusable(l)) {
@@ -13493,6 +13490,10 @@ function renderAccounts(a, p) {
     }
     if (a.agent === "claude") list.append(addRow(t("Add an account by setup-token…"), startClaudeToken));
   }
+  if (p) {
+    const fill = () => window.acctBackupFill(p, a, list, ls, quota);
+    window.acctBackupFill ? fill() : import("./acctbackup.js").then(fill, () => {});
+  }
   arrangeAccountRows(list, p);
   return list;
 }
@@ -13551,10 +13552,7 @@ function codexNote(cls, n, s) {
   return box;
 }
 
-// Accounts brought in from another tool's export instead of signing in
-// again: the files' text (or what is pasted) goes to magpie, which checks
-// each account with the vendor before keeping it, and says what became of
-// each. What is read stays here only until it is sent; the box masks it.
+// Import masked account exports, checked by the backend before saving.
 // A sign-in waiting for its browser's address is kept behind the import
 // rather than canceled: that address pasted into the import box finishes
 // it there (LuvLetter, magpie in Docker, pasted it into this box instead of
@@ -13681,7 +13679,7 @@ function renderLoginImport(sub) {
   return box;
 }
 
-// Each account's allowance loads on its own and fills the rows in.
+// Load allowances for account rows.
 const loginUsage = {}; // agent → { at, data: { user: quota }, loading }
 function loginUsageOf(agent) {
   const u = (loginUsage[agent] ||= {});
@@ -14727,7 +14725,7 @@ function renderKeyAccounts(p) {
     // its own models (#474), when there is another key to send the rest to
     const [amPill, amBox] = p.keyList.length > 1 || accountModelsOf(p, k.id).length ? accountModels(p, k.id, true, k.name || k.masked) : [];
     if (amPill) row.append(amPill);
-    // how many requests it has out at once, and waiting (#892)
+    // Lane limit (#892).
     row.append(laneLimitPill(p, k.id, p.id + "#" + k.id, k.name || k.masked));
     row.append(el("span", "grow"));
     // one, under the chips if it doesn't fit (young02036)
