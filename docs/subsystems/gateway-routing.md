@@ -48,6 +48,54 @@ backfilled; see [Gateway Session Aggregation](gateway-sessions.md).
 | Vertex AI | A [Google Vertex AI provider](providers-accounts.md#responsibilities-and-sources-of-truth) speaks Gemini for its Gemini models, chat completions for its partner models, and Anthropic's Messages API for Claude. Claude (`provider.VertexClaude`: `claude-opus-5-5`, `claude-sonnet-4-5@20250929`) is relayed or translated as at any Anthropic vendor, and `forwardOnce`, after every other change to the body, moves the request to where Anthropic's Vertex SDK sends it (`provider.VertexClaudeRequest`): `<base>/publishers/anthropic/models/<model>:streamRawPredict` when the body streams, `:rawPredict` when it doesn't, the model out of the body; count_tokens to `count-tokens:rawPredict` with the model kept (`countTokens` counts at a provider whose `Base(Anthropic)` is set); `anthropic_version` `vertex-2023-10-16` added unless the body has one; Claude Code's `?beta=true` never sent. `thinkingOffAsTaken` and `samplingAsTaken` run before, so they read the model from the body. Tool search's beta goes as `tool-search-tool-2025-10-19`, the name Claude Code gives it for Vertex as for Bedrock (`bedrockBetas`); Bedrock's left-out betas aren't left out for it. Gemini's effort rules (`vertexEffort`) don't touch it (`TestVertexClaudeModel`). A partner model (`provider.VertexPartner`: a `publisher/model` id such as `deepseek-ai/deepseek-v4.1-flash-maas`) goes to Google's OpenAI-compatible `<base>/endpoints/openapi/chat/completions` (`Base(Chat)`, `ListedAPIs`), signed with the same token, its full id in the body. It is relayed or translated there as any chat completions vendor is, and none of the Gemini rules below (`vertexEffort`, `vertexThinking`, signatures) touch it (`TestVertexPartnerModel`). A Gemini model's request goes to `<base>/publishers/google/models/<model>:streamGenerateContent?alt=sse` (`provider.VertexPath`, `upstreamPath`), the model named as the user's upstream name for it says (`UpstreamNameIn`, which the usage log's endpoint names too), with no `model` or `stream` field in its body (`passthrough`, `forwardOnce`, `geminiRequest`). A Gemini client's request is relayed as it came, its own `thinkingConfig`, `safetySettings` and the rest kept: streamed there, asked whole to `:generateContent` (`provider.VertexWholePath`), which answers one JSON body (Factory's rule of translating a whole request, as its route only streams, isn't Vertex AI's). Every other API's is translated (`buildFor`, `buildVertex`) and its stream read by `codeAssistDecoder`, which gives thought parts as reasoning, never as the answer's text. Effort: `vertexEffort` fits it to the model's levels, reasoning turned off going as `minimal` fitted the same way, and holds a model whose levels aren't known to `low`…`high`. `vertexThinking` sends Gemini 3 a `thinkingLevel` (`includeThoughts` false with reasoning off) and 2.5 a `thinkingBudget` in the model's range (`vertexBudgets`): turned off, the budget that stops its thinking, or Pro's least, as Pro can't stop. Thought signatures are every Gemini path's (#1445): a call's signature reaches the client in its id (`signedID`) and goes back on the call it came on, while a call with none in a step Vertex AI signed goes without; a step with nothing to give back has every call sent `skip_thought_signature_validator`. A 400 `Invalid thought signature.` (or AI Studio's `Corrupted thought signature.`, `signatureRefused`) is asked again with every call sent so (`withoutSignatures`), for that request only, at any upstream Gemini's signatures reach (`signaturesReach`), relayed too; it rests no account and lets a group go on (`restAfterMarked`, `shapeRefused`). A 400 refusing `minimal` (`geminiRefusedLevel`) is asked again at the model's lowest other level (`onEffort`), and `markUnfit(offRefused)` keeps that level until magpie restarts; that retry is the translated path's. Vertex AI's own Google Search grounding isn't used: `searchHosts` names only `generativelanguage.googleapis.com` for Gemini, so magpie searches for it (`search.go`). | [`vertex.go`](../../internal/gateway/vertex.go), [`gateway.go`](../../internal/gateway/gateway.go), [`codeassist.go`](../../internal/gateway/codeassist.go), [`gemini.go`](../../internal/gateway/gemini.go), [`gemini_signature.go`](../../internal/gateway/gemini_signature.go), [`search.go`](../../internal/gateway/search.go) |
 | Bedrock Mantle | A request on chat completions or Responses to an [Amazon Bedrock Mantle provider](providers-accounts.md#responsibilities-and-sources-of-truth) goes to the prefix that serves its model (`mantleRoutes`, `provider.MantleBase` in `forwardOnce`): `/openai/v1` for OpenAI's closed GPTs and xAI's Grok, `/v1` for the rest. A model Mantle refuses there with "model `x` isn't supported on this route" (a maker the rule doesn't know yet) is asked once more at the other prefix, and when it is taken there that prefix is remembered for the model in `unfit` (`mantleRouteKey`) until the gateway restarts. A model refused at both gets the first refusal and nothing is remembered (`mantleReroute`). Messages go to `/anthropic` alone. | [`mantle.go`](../../internal/gateway/mantle.go), [`gateway.go`](../../internal/gateway/gateway.go) |
 
+## Smart backup accounts
+
+Subscription accounts can be kept as backups under Smart, within a provider
+or pooled in a Smart routing group. Classification and its saved settings
+are owned by [Providers and accounts](providers-accounts.md#smart-backup-classification).
+With automatic detection off and no account overrides, ordering and traces
+keep their previous behavior.
+
+[`routes.Smart`](../../internal/routes/strategies.go) orders accounts with
+room in two tiers: primary accounts first, backup accounts next, applying
+its full learning, unused-account, recent-token, renewal, lapse, wallet and
+listed-order rules within each tier. Both precede accounts running low
+(90–97% of a short rate-cap window); those low accounts put primary before
+backup, then compare use. Accounts at 98% or more go last. A budget window
+(a day or longer) at 90–97% alone does not make an account low. Caps hold
+accounts out and rests put them last as usual, so new conversations spill
+to usable backups when the primary accounts are low, capped or resting.
+Other routing modes keep their existing ordering; the existing provider
+*Use first* and account *Use credits before moving* rules still apply.
+
+[`weighRouted`](../../internal/gateway/routing.go) fills `routes.Seat.Backup`
+from `Provider.IsBackupAccount`. Its `weighing.backup` map uses
+`allowanceKey` (account and model), so two models on the same account can
+have different classifications. The trace's `Weighed.Backup`
+([`trace.go`](../../internal/gateway/trace.go)) is `backup: true` only for a
+current backup weighed under Smart, including pooled group heads in
+`planLevel` ([`fallback.go`](../../internal/gateway/fallback.go)). A backup
+promoted before its budget reset has no backup mark for that request;
+promotion changes neither its saved override nor the provider's setting.
+
+Affinity runs after weighing. With Stays: Auto, an existing conversation
+on a backup keeps its warm cache (`Why: "cache"`), even when a primary
+account resets and leads again. The normal cache requirements (under five
+minutes old and at least 1,024 tokens) and 98% spent threshold still apply;
+new and cold-cache conversations follow the new primary lead. The existing
+group stand-in rules still apply when the conversation crossed members.
+In [`affinity.go`](../../internal/gateway/affinity.go), `backupBehind`
+prevents `readyForNew`, `leastHeld` and `after` from spreading a conversation
+onto a backup while a primary leads. Once a backup leads, sessions can
+spread across usable backups normally. Session and Strict retain their
+existing conversation guarantees.
+
+`TestGatewayBackupRouting`, `TestGatewayBackupWarmCacheAndRecovery`,
+`TestGatewayBackupSessionSpreading`, `TestGatewayBackupModelWindows` and
+`TestGatewayBackupGroupModelWindows` in
+[`account_backup_test.go`](../../internal/gateway/account_backup_test.go)
+cover provider and group ordering, recovery, affinity and model scope.
+
 ## Codex titles, descriptions, summaries and predictions
 
 Codex's title and description requests are independent hidden turns. The
@@ -2652,6 +2700,7 @@ whole conversation every turn. Codex says `store: false`, so
 ## Verification
 
 ```sh
+go test -tags nogui -count=1 -run 'Backup|Smart' ./internal/routes ./internal/gateway
 go test -tags nogui ./internal/gateway -run 'TestGroupAsksOneRestingMemberNotEach|TestLoneRestingMemberStillAsked|TestRetrievalGroupAsksOneRestingMember|TestProbeOne|TestLoop|TestLongReplyThatDoesNotLoop|TestQuiet|TestSilentHeld|TestRotateSpreadsSessions|TestRouting|TestSmartRouting|TestFallback|TestNoFallbackForOtherErrors|TestLastFallbackErrorReachesTheAgent|TestRateLimitedSinksToTheBack|TestTryNow|TestRenewedToldToTheRoutingPage|TestGroupRateLimitedSinks|TestAffinity|TestSeveralKeysOnTakeOverFromEachOther|TestModelNotInPlanRestsTheModelNotTheKey|TestSubscriptionAccountsTakeOver|TestGroup|TestTrace|TestImageTool|TestCodexNoCredits|TestCodexCredits|TestWindowCapsHoldTheAccount|TestAccountCap|TestClaudeGoesOnMessagesWhereTheRelayHasThem|TestAutoRelaysOnTheClientsOwnAPI|TestSearchOfferedStaysOnTheClientsAPI|TestSearchFollowsTheSearchersProxy|TestCodexSearchAnsweredOnResponses|TestAgentEffortOnCursorLocal|TestAzureCompactionWithoutMagpiesReasoning|TestCodexCompact|TestProtection|TestSearchedConversation|TestUnsearchedConversationUnchanged|TestNotAnAPIReply|TestAPIReplyUntouched|TestCodexBackendWebPage|TestSub2APIKeyLimitIsQuota|TestKeysWeighedByTheirWindows|TestGroupWeighsKeyWindows|TestKeyOutOfItsWindowRestsUntilReset|TestKeyPoolErrorDoesNotRestForWindow|TestKeyBackOnceItsWindowIsNotFull|TestRestingKeyReadAgainInAnOrderedGroup|TestClaudeAccountBackOnceItsWindowRenews|TestThinkingStreams|TestHeldThinkingKeepsTheAgentAlive|TestCodexHeardWithinItsIdleTimeout|TestRefusalAfterThinkingFailsOver|TestGeminiEmptyRepliesAskedAgain|TestLocalUnredacted|TestMaskedRequestGoesToTheModelSet|TestCodexSigninTurnGoesToTheModelSet|TestMaskRoute|TestCORS|TestForeignPagesRefused|TestAIStudioThinking|TestGeminiThoughtsThroughLocalProxy|TestGeminiRefusedLevel|TestGeminiThinkingOffAtItsLowest|TestThinkingOff|TestTranslatedEffortLoggedAsSent|TestTranslatedThinkingOffRefused|TestSub2APIThinkingOffRefused|TestRefusesThinkingOff|TestClaudeFiveFiveThinkingOffOnTheWire|TestSamplingAsTheModelTakesIt|TestHaikuFiveFiveSamplingOnTheWire|TestGeminiThoughtsMarkedInExtraContent|TestGeminiThinkingLevelRefused|TestGeminiMinimalRefusedTwiceAtOnce|TestPassthroughGeminiMinimalRefused|TestPassthroughEffortNoneRefused|TestPassthroughMinimalRefusedNoneTaken|TestOtherOffNamed|TestClaudeSignInNotToldItsSignInFailed|TestSignInWriterReleasesA403|TestSignInBetaStaysWithMagpie|TestStructuredOutput|TestResponsesTextKeepsVerbosityBesideFormat|TestRefusedFormatToldInWords|RPM|TestQueued|TestCustomGeminiUpstream|TestWholeNums|TestGrokCalls|TestOnlyGrokCalls|TestGrokModel|TestGrokPluginCalls'
 go test -tags nogui ./internal/gateway -run 'TestMemberTooSmallIsNotAsked|TestMemberTooSmallIsTheLastResort|TestClaudeAccountsSpentFallBackToCodex|TestConversationOutgrowingItsMemberMoves|TestRoomyLeavesWhatItCantJudge|TestPayloadTooLarge|TestOverflow|TestContextOverflow|TestRelayInputCap|TestEveryVendorsOverflow'
 go test -tags nogui ./internal/gateway -run 'TestPlain403|TestOrderedKeepsAnAccountAt98|TestPromptRefusalRestsNobody'

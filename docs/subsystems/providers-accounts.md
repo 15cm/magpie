@@ -82,6 +82,67 @@ keys and accounts per request is in [Gateway routing and fallback](gateway-routi
 | Protocol detection | Works out which of Chat, Responses, Anthropic Messages and Gemini generateContent a base URL speaks when a provider is added. Each is asked at the URL as it takes it (`DetectBase`); Gemini's at the `…/v1beta` beside a typed `…/v1` or bare host, a Gemini model from the list picked for it, with the key in `x-goog-api-key` (#1346). Each API is asked with a model that chats, if the list has one; an embedding or rerank model (`catalog.ServesOf`) is asked only on Chat's URL, at its `/embeddings` or `/rerank` with the smallest body and no extra body, as the gateway's `retrieve` asks it, and the other APIs say why they weren't asked (heatonz on Discord: a vendor of only those detected nothing, asked to chat; `TestDetectEmbeddingOnly`). A saved provider whose list has nothing to chat with tests on such a model (`testModel`, `TestTestEmbeddingOnly`), and its editor and the add form's Fetch models say the models need no pick (`retrieval` in the list's answer and the provider's JSON, `provider-retrieval-only.test.cjs`). A model's test (Test models, a model's right-click, `magpie provider test`) asks the account or key a request for it goes to: `provider.AccountsFor` and `provider.KeysFor` ([`route_accounts.go`](../../internal/provider/route_accounts.go)), which the gateway's `perKeyEvery` routes by too, its usage and spend caps aside (one the user lets serve it, `AccountModels`; whose own list or plan has it, `Account.Lists`, `PlanServing`, `Serving`; in the user's order, `AccountsOn`), so a pool whose accounts list different models (a newapi plugin's) asks the one whose list has it, and one every account is barred from isn't asked. The provider's Test picks each endpoint's model from every account's and asks it of the account that serves it (`routedTo`), and with keys the first key with a model of its own to test (`testWith`). The request log's row names the account asked (`loggedAs`; #4992, `TestModelTestAsksTheAccountThatServesIt`). Detection, endpoint tests and model tests share `probe`, which adds `anthropic-version` only for Anthropic Messages; OpenAI probes omit that default so a relay that refuses it can answer. A model's test that the vendor turns away with its word that the model is served on another API (`catalog.WrongEndpoint`, the gateway's words) asks the next API the provider has a URL for, as the gateway's `usable` takes it (the model's picked or listed API, else each API it isn't named-only on), with a key that sees the model there (`keySeeing`); that API's answer is the model's, and with none left, or every one saying it, the first stays. As Codex the next API is asked with Codex's headers, as the gateway sends them on Responses and Chat; as Claude Code it isn't, since the gateway sends Claude Code's on Messages alone (#3766, `TestTestModelsMovesToTheAPIServingIt`, `TestTestModelsKeepsAModelOnItsAPI`, `TestTestModelsAsAClientMovesAsTheGatewayDoes`). User-supplied headers still apply through `Sign`. The editor asks with the form as it stands, before any Save (#1545): the URL, key and models typed (`picked`, else the saved picks, else the vendor list); a key not typed again is the saved provider's, or for an unsaved copy the copied one's (`copyOf`). The probe writes nothing and adds no provider, and the route stays behind `magpie web`'s key. An endpoint or model test fails fast and can be stopped (RIck on Discord: 测试模型 took long to fail and couldn't be cancelled): a probe on magpie's own client that has no connection in `connectWait` (10s) fails then (`connecting`, an httptrace `GotConn`), and a host that couldn't be reached (no connection, DNS, refused, a bad certificate) fails the run's other models at once (`withUnreached`, `TestTestModelsUnreachedHostFailsOnce`); a stream that breaks off before an answer is a failure. While a test runs its Test models and endpoints' Test read Stop, which aborts the window's request and posts `provider/teststop` with the test's `run`, ending the vendor's request on the server too (`testRuns` in [`providers.go`](../../internal/gui/providers.go), since WebView2 doesn't end the request when a fetch is aborted; `TestProviderTestStops`, `model-test-stop.test.cjs`). | [`detect.go`](../../internal/provider/detect.go), [`test.go`](../../internal/provider/test.go) |
 | A pasted curl command | A curl command from a vendor's docs pasted into a custom provider's Base URL or API key fills the editor in (@mark_li21 on X). `curlOf` reads it as a shell would (lines joined by `\`, cmd's `^` or PowerShell's backtick; `curl.exe`; quotes and escapes), and takes: the API its URL's endpoint names (`…/chat/completions` Chat, `…/messages` Anthropic Messages, `…/responses` Responses) with the base URL before it, spelled as that API wants it (`respellURL`: Anthropic at its root, `/v1` after a bare host); the key from `Authorization: Bearer`, `x-api-key` or `api-key`, unless it only stands for one (`$OPENAI_API_KEY`, `${X}`, `%X%`, `<token>`, `YOUR_API_KEY`), when the key's box is left empty and focused; and the `model` of its JSON body, added to a new provider's models (a saved one's picks are left alone, since adding to none would narrow what it serves). A preset's editor takes only the key. A note (`editorError`, kind `note`) says what was taken, a placeholder like `{WorkspaceId}` left in the URL, and a URL with no known endpoint. Text that isn't a curl command pastes as before, several keys included. Tested on the docs' own examples (`fixtures/curl`). | [`app.js`](../../internal/gui/assets/app.js) (`curlOf`, `fromCurl`), [`provider-curl-paste.test.cjs`](../../internal/gui/tests/provider-curl-paste.test.cjs) |
 
+## Smart backup classification
+
+Subscription picks in `providers.json` keep `Provider.BackupNoFiveHour`
+(`backupNoFiveHour`, false by default) and `Provider.AccountBackup`
+(`accountBackup`, keyed by lower-case account name). An absent override is
+`AccountBackupAuto` (`""`); `"backup"` explicitly keeps an account as backup,
+and `"primary"` exempts it from automatic detection. `auto` clears an
+override. These settings apply to subscription accounts, including plugin
+accounts; API-key providers are refused. The fields are cloned, normalized
+and copied through `accountSettings` in
+[`provider.go`](../../internal/provider/provider.go), and account renames
+move the override in `renameSettled`
+([`copilot_accounts.go`](../../internal/provider/copilot_accounts.go)).
+
+[`account_backup.go`](../../internal/provider/account_backup.go) owns
+`AccountBackupMode`, `ParseAccountBackup`, `SetAccountBackup`,
+`SetBackupNoFiveHour`, `Allowance.LacksShortWindow` and `IsBackupAccount`.
+Automatic detection needs a known allowance with a complete rolling budget
+window of at least 24 hours for the requested model, and no positive window
+shorter than 24 hours for that model. Wallet balances and partial readings
+cannot supply that budget. An unknown account on auto remains primary so
+the existing learn-on-answer probe can read it; a manual backup stays
+backup while unknown. Classification is per model, not inferred from a
+plan's name.
+
+A configured backup is temporarily promoted to primary when it has less
+than 98% used for the model and a complete, non-wallet budget window with a
+known future reset, and either its remaining pace is at least 2.0 percentage
+points per hour (`BackupPromotePace`) or its reset is within 24 hours
+(`BackupPromoteLead`). `IsBackupAccount` filters to those budget windows
+before asking `Allowance.Pace`; a short-window or wallet reset cannot
+promote it. `BackupPromoted` checks the share, pace and reset boundary.
+An unstarted week with no reset time is not promoted. Promotion is computed
+at each look and never rewrites the configured mode; after a fresh reading
+or reset, the account can be backup again. Smart ordering, trace state and
+conversation affinity are owned by
+[gateway routing](gateway-routing.md#smart-backup-accounts).
+
+When an active local Codex or Claude sign-in is spent or capped,
+`NextLogin` in [`codex_switch.go`](../../internal/provider/codex_switch.go)
+looks through readable spares with room for a current primary before
+choosing the first usable backup. Promotion counts here too. The switch
+threshold and the fallback to the most room when every spare is past its
+line are unchanged; this preference does not change `NextInOrder`, the
+explicit `accounts switch … next` rotation.
+
+The CLI exposes the configured policy through
+`magpie provider account-backup <id> [account [backup|primary|auto]]`,
+`magpie provider pool <id> --backup-5h on|off` and
+`magpie provider set <id> backup-5h=on|off` (`backup-no-5h` is an alias).
+Listing modes describes the saved policy, not whether a budget is promoted
+now. Invalid modes and key-based providers are refused before writing.
+See [`providers_cli.go`](../../internal/cli/providers_cli.go) and
+[`pool_cli.go`](../../internal/cli/pool_cli.go).
+
+Classification, promotion boundaries, persistence and rename behavior are
+covered by [`account_backup_test.go`](../../internal/provider/account_backup_test.go);
+`TestNextLoginPrefersPrimaryBeforeBackup` in
+[`switch_next_test.go`](../../internal/provider/switch_next_test.go) covers
+the local spare preference.
+
 ## Remote magpie
 
 The `remote-magpie` preset is of its own kind, `KindRemote` (`remote`), not
@@ -398,6 +459,7 @@ and `TestHistoricalWindowHoldsUsesEachWindowsOwnReading`.
 ## Verification
 
 ```sh
+go test -tags nogui -count=1 -run 'Backup|AccountSettingsKept|NextLogin' ./internal/provider ./internal/cli
 go test -tags nogui ./internal/provider -run 'GoesThroughItsProxy'
 go test -tags nogui ./internal/provider -run 'TestClaudeSwitchTakesTheAccountsProxy|TestClaudeAccountProxy'
 go test -tags nogui ./internal/plugin -run TestPluginSignInProxy

@@ -2012,22 +2012,27 @@ result for every request: who went first, and why.
    a Claude Code subagent goes with its session's account.
 
 So routing decides who goes first only for a conversation nobody has
-answered yet. An account that has used 90% goes behind the others for new
-conversations, but a conversation already on it stays there until 98%.
+answered yet. An account that has used 90% of a short rate-cap window goes
+behind those with room for new conversations, but a conversation already
+on it stays there until 98%.
 
 **The routings.** Smart, Least used first and Use before expiry go by the share
 used of the fullest window that counts the model, the 5-hour window
 included. Smart and Use before expiry put an account behind the others once a
-window is at 90% or more, and behind those once one is at 98% or more,
-each of these groups ordered by the share used.
+short rate-cap window (less than a day, such as the 5 hours) is at 90% or
+more, and behind those once any window is at 98% or more. A week at
+90–97% alone still has room. Within the low group, Smart puts primary
+accounts before backups, then compares the share used.
 
-- **Smart** (the default): subscription accounts with known windows for
-  the requested model all at 0% go first. Among these, the account magpie
-  sent the fewest tokens lately goes first (an hour's half-life), so usage
+- **Smart** (the default): primary accounts with room go before backup
+  accounts with room (see *Premium backup* below); both go before accounts
+  running low or spent. Within each tier, subscription accounts with known
+  windows for the requested model all at 0% go first. Among these, the
+  account magpie sent the fewest tokens lately goes first (an hour's half-life), so usage
   still rounded to 0% doesn't keep selecting one account. Unknown quotas,
   readings with no window for this model, and API keys get no such preference.
-  Among unused accounts tied on recent tokens, and the other accounts under
-  90%, the one whose allowance renews soonest goes first, because what it
+  Among unused accounts tied on recent tokens, and the other accounts with
+  room in the same tier, the one whose allowance renews soonest goes first, because what it
   has left is lost at the reset. Conversation affinity still applies.
   The biggest window decides: the week, then the 5 hours only
   when the weeks renew in the same hour. Reset times are compared to the
@@ -2131,6 +2136,68 @@ finds for a model two providers serve don't need it. Turned off, the gateway
 doesn't list or serve a group of your own, and the Routing groups page has no New
 group button; `magpie groups` still lists them.
 
+**Premium backup.** To spend Standard accounts' allowance before using
+Premium accounts, keep the provider or pooled routing group on Smart and
+turn on *Use accounts without a 5-hour limit as backup* in the provider's
+account editor. It starts off. For the model being requested, an account
+with a known rolling budget of a day or longer (usually the week) and no
+short rate-cap window (usually the 5 hours) becomes a backup. The plan's
+name does not decide it. A wallet balance or incomplete budget reading
+does not qualify, and an unknown account on Automatic is probed as usual
+before it can be detected as a backup.
+
+Each account's *Automatic*, *Backup* or *Primary* control sets its policy:
+Automatic follows that checkbox; Backup keeps it behind primary accounts
+even with a 5-hour window or unknown quota; Primary keeps it primary even
+without a 5-hour window. Backup works with the checkbox off too. These are
+saved choices: a backup can temporarily compete as primary before its
+budget renews, without changing the choice shown in the editor.
+
+Smart orders the primary accounts with room among themselves, then the
+backups with room among themselves, using its usual rules in each tier.
+Thus a fresh Premium backup at 0% waits behind a Standard primary at 25%.
+Once all primary accounts reach 90% of their short window, hit a configured
+usage cap or rest after an error, new conversations spill to usable backups
+before trying the primary accounts at 90–97%. A week alone can reach 97%
+and still count as having room; any window at 98% counts as spent. Other
+routing modes keep their existing ordering.
+
+To avoid wasting a backup's remaining weekly allowance, magpie temporarily
+promotes it to primary when it is under 98% used and its complete rolling
+budget has a known future reset, with either at least 2% of the budget left
+per hour until reset, or at most 24 hours until reset. For example, 80% left
+with 36 hours to go is about 2.22% per hour; 30% left with 20 hours to go
+qualifies by the 24-hour rule. A fresh week with no reset time, a short
+window and a wallet balance cannot trigger promotion. The promoted account
+competes under Smart's normal rules; it does not always go first. Its fresh
+week can become backup again after reset.
+
+With *Stays: Auto*, a conversation already on a backup keeps its warm cache
+under the normal five-minute and 1,024-token rules until it is spent or its
+cache goes cold, even if a primary Standard account resets meanwhile. New
+and cold-cache conversations go to the primary lead. The existing group
+stand-in rules still apply across members. Under *Stays: Session* or
+*Strict*, new conversations do not spread onto backups while a usable
+primary leads; once a backup leads, they can spread across the backups.
+The Routing page marks current backups behind a primary as *kept as backup*;
+a promoted backup is currently primary.
+
+The same settings are available from the CLI (subscription accounts only):
+
+```sh
+magpie provider pool codex --backup-5h on
+magpie provider set codex backup-5h=off
+magpie provider account-backup codex
+magpie provider account-backup codex premium@example.com backup
+magpie provider account-backup codex standard@example.com primary
+magpie provider account-backup codex premium@example.com auto
+```
+
+`account-backup` without an account lists the configured modes; with an
+account alone it shows that account's mode. `auto` removes its override.
+The pool command also shows the checkbox's setting. With automatic
+detection off and no overrides, account selection stays as before.
+
 **Make first** sets the accounts' order. How much that order counts
 depends on the routing:
 
@@ -2138,7 +2205,7 @@ depends on the routing:
 | --- | --- |
 | In order | Everything: the first takes every request it can. |
 | In turn | Where the rotation goes next. |
-| Smart | Only between accounts whose windows all renew in the same hours, or whose shares used are equal. |
+| Smart | Within the same primary or backup tier, between accounts whose other Smart criteria tie: renewal hours, or shares used in the low tier. |
 | Least used first | Only between accounts with the same share used and the same tokens sent lately. |
 | Use before expiry | Only between accounts in the same pace band that magpie sent the same tokens lately, in practice none since magpie started. |
 | Speed first | Only between those within a tenth of each other's speed, and among those not measured lately. |
@@ -2199,8 +2266,9 @@ never sees it. For that, magpie looks at the account the agent is signed
 in to a minute after it starts and every 5 minutes after: once it has used
 98% of a window (100% In order), or reached its usage cap, magpie signs
 the agent in to the next ticked account, in their order, whose allowance
-is known and under that share. A saved Claude account magpie knows
-nothing of yet (see below) is read first. When every other account is
+is known and under that share, preferring primary spares before backups
+(classified with the same promotion rule above). A saved Claude account
+magpie knows nothing of yet (see below) is read first. When every other account is
 past that share too, magpie moves the agent to the one with the most room
 left, if it has at least a point more than the account it is on; else the
 agent stays. `magpie accounts switch claude next` (or `codex next`) does
