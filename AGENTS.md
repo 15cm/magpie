@@ -111,6 +111,24 @@ This magpie-side code still runs for moved subscriptions:
 The parity tests, `internal/gateway/plugin_*_test.go`, hold each plugin to
 what its built-in did.
 
+## Development verification
+
+For Magpie development, test business logic functionality only. Skip all
+GUI-related tests, including Playwright/browser regressions, visual and
+layout checks, GUI asset/script-budget and translation checks, and tests in
+`internal/gui` and `internal/fonts`. This applies to feature work, fixes, reviews, and workflow
+verification, including `e2e-feature`.
+
+Continue running applicable business-logic unit and integration tests with
+isolated test state. For the Go business-logic suite, exclude GUI packages:
+
+```sh
+go list -tags nogui ./... | rg -v '/internal/(gui|fonts)(/|$)' | xargs go test -tags nogui
+```
+
+This project-specific testing policy overrides GUI test requirements in
+`docs/code-standards.md`, feature plans, skills, and other workflows.
+
 ## Sandbox E2E
 
 This project never requires end-to-end sandbox tests, including when using
@@ -118,5 +136,5 @@ the `e2e-feature` skill. Treat the skill's sandbox E2E phase as **not needed**
 for this repository and skip it. This project-specific exemption overrides
 any sandbox E2E requirement in the feature plan or workflow.
 
-Other applicable unit, integration, browser regression, lint and build checks
-remain governed by the project’s code standards.
+Applicable business-logic unit and integration tests remain required;
+GUI-related tests are skipped under Development verification above.
