@@ -42,6 +42,16 @@ func realBunSandbox(t *testing.T) {
 	forgetHeads()
 }
 
+// realBunGitURL lets Bun clone the local fixture through its HTTPS path.
+// Bun 1.3.13 does not clone file:// URLs; Git's rewrite keeps every fetch local.
+// realBunSandbox isolates the global Git config this writes.
+func realBunGitURL(t *testing.T, repo gitRepo) string {
+	t.Helper()
+	const url = "https://magpie.test/repo.git"
+	repo.git(repo.work, "config", "--global", "url."+strings.TrimPrefix(gitFileURL(repo.bare), "git+")+".insteadOf", url)
+	return "git+" + url
+}
+
 // repoHead is the commit the repository's main is at now.
 func repoHead(t *testing.T, repo gitRepo) string {
 	t.Helper()
@@ -64,7 +74,7 @@ func TestGitUpdateInstallsTheBranchsCommitNow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	repo := newGitRepo(t, filepath.Join(t.TempDir(), "repo.git"))
-	spec := gitFileURL(repo.bare)
+	spec := realBunGitURL(t, repo)
 	if _, err := Add(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +140,7 @@ func TestGitUpdateKeepsACommitPin(t *testing.T) {
 	defer cancel()
 	repo := newGitRepo(t, filepath.Join(t.TempDir(), "repo.git"))
 	pin := repoHead(t, repo)
-	spec := gitFileURL(repo.bare) + "#" + pin
+	spec := realBunGitURL(t, repo) + "#" + pin
 	if _, err := Add(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
