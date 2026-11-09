@@ -343,6 +343,14 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	// every spare past its line too: the one with the most room left, when
 	// it has more than the one it is on by roomMargin, so that the agent
 	// isn't moved to and fro between two all but even; else it stays
+	var p Provider
+	for _, saved := range storedFile().Providers {
+		if saved.ID == agent {
+			p = saved
+			break
+		}
+	}
+	firstBackup := ""
 	best, most := "", math.Inf(-1)
 	if !q.Held {
 		most = roomLeft(q, share, AccountCapsOf(agent, from), now) + roomMargin
@@ -359,11 +367,20 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 			continue
 		}
 		if !usedPast(q, share, now) && !capped(l.User, q) {
-			return from, l.User, false, true
+			a, ok := routedAllowance(agent, l.User, q, now)
+			if !p.IsBackupAccount(l.User, "", a, ok, now) {
+				return from, l.User, false, true
+			}
+			if firstBackup == "" {
+				firstBackup = l.User
+			}
 		}
 		if r := roomLeft(q, share, AccountCapsOf(agent, l.User), now); r > most {
 			best, most = l.User, r
 		}
+	}
+	if firstBackup != "" {
+		return from, firstBackup, false, true
 	}
 	if best != "" {
 		return from, best, false, true

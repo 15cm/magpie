@@ -2185,7 +2185,8 @@ func route(p provider.Provider, cs []candidate, model string, from provider.Prot
 // its allowance each account has used and when that renews, and the tokens
 // each served lately. The routing trace shows the same.
 type weighing struct {
-	lefts map[allowanceKey]left // the allowance of each account and model
+	backup map[allowanceKey]bool // Smart backup classification by account and model
+	lefts  map[allowanceKey]left // the allowance of each account and model
 
 	tokens map[string]float64 // least used: tokens each served lately
 
@@ -2339,6 +2340,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 	known := map[string]map[string]provider.Allowance{}
 	now := time.Now()
 	wg.lefts = map[allowanceKey]left{}
+	wg.backup = map[allowanceKey]bool{}
 	for _, c := range cs {
 		var a provider.Allowance
 		var ok bool
@@ -2354,6 +2356,9 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 				known[ag] = allowances(ag)
 			}
 			a, ok = known[ag][c.p.Account.User]
+		}
+		if c.p.Account != nil && c.p.IsBackupAccount(c.p.Account.User, c.model, a, ok, now) {
+			wg.backup[c.allowanceKey()] = true
 		}
 		if ok {
 			u, r := a.For(c.model, now)
@@ -2390,7 +2395,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 		if !known && c.p.Account != nil {
 			pace = provider.FreshPace
 		}
-		seats[i] = routes.Seat{Key: c.rest, Account: c.p.Account != nil, Known: known, Learns: learns(c, wg.lefts),
+		seats[i] = routes.Seat{Key: c.rest, Backup: wg.backup[c.allowanceKey()] && routingOf(p.Routing) == "", Account: c.p.Account != nil, Known: known, Learns: learns(c, wg.lefts),
 			Used: l.used, WeekLow: l.weekLow, Soon: l.soon, Unreached: l.unreached, Lapse: l.lapse, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits, First: l.first,
 			Left: l.bal, LeftIn: l.balIn, Spent: spentRest(c), Lead: c.p.UseFirst}
 	}

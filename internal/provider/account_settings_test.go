@@ -23,6 +23,8 @@ func TestAccountSettingsKept(t *testing.T) {
 		}
 		q := *p
 		q.AdditionalTools = true
+		q.BackupNoFiveHour = true
+		q.AccountBackup = map[string]string{"me@example.com": AccountBackupOn}
 		q.ExtraBody = ExtraBody{"service_tier": json.RawMessage(`"priority"`)}
 		q.ReplyHeaders = []string{"X-Trace-Id"}
 		q.QuotaRest = 90
@@ -39,6 +41,9 @@ func TestAccountSettingsKept(t *testing.T) {
 		if got.Account == nil {
 			t.Fatalf("%s: no longer the signed-in account: %+v", id, got)
 		}
+		if !got.BackupNoFiveHour || !maps.Equal(got.AccountBackup, q.AccountBackup) {
+			t.Errorf("%s: backup settings not kept: %v %v", id, got.BackupNoFiveHour, got.AccountBackup)
+		}
 		if !got.AdditionalTools {
 			t.Errorf("%s: additional-tools not kept", id)
 		}
@@ -54,11 +59,12 @@ func TestAccountSettingsKept(t *testing.T) {
 		// set back, each is the default again
 		r := *got
 		r.AdditionalTools, r.ExtraBody, r.ReplyHeaders = false, nil, nil
+		r.BackupNoFiveHour, r.AccountBackup = false, nil
 		r.QuotaRest, r.RestCap, r.LimitRestOff, r.Patience = 0, 0, false, 0
 		if err := Save(r); err != nil {
 			t.Fatal(err)
 		}
-		if got, _ := Find(id); got.AdditionalTools || len(got.ExtraBody) > 0 || len(got.ReplyHeaders) > 0 || got.QuotaRest != 0 || got.RestCap != 0 || got.LimitRestOff || got.Patience != 0 {
+		if got, _ := Find(id); got.BackupNoFiveHour || len(got.AccountBackup) > 0 || got.AdditionalTools || len(got.ExtraBody) > 0 || len(got.ReplyHeaders) > 0 || got.QuotaRest != 0 || got.RestCap != 0 || got.LimitRestOff || got.Patience != 0 {
 			t.Errorf("%s: left after clearing: %+v", id, got)
 		}
 	}

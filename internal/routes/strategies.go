@@ -156,6 +156,9 @@ var Smart = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
 	}
 	sort.SliceStable(fine, func(i, j int) bool {
 		a, b := seats[fine[i]], seats[fine[j]]
+		if a.Backup != b.Backup {
+			return !a.Backup
+		}
 		if a.Learns != b.Learns {
 			return a.Learns
 		}
@@ -200,7 +203,12 @@ var Smart = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
 		}
 		return x.Before(y)
 	})
-	sort.SliceStable(low, func(i, j int) bool { return seats[low[i]].Used < seats[low[j]].Used })
+	sort.SliceStable(low, func(i, j int) bool {
+		if seats[low[i]].Backup != seats[low[j]].Backup {
+			return !seats[low[i]].Backup
+		}
+		return seats[low[i]].Used < seats[low[j]].Used
+	})
 	sort.SliceStable(spent, func(i, j int) bool { return spentBefore(seats[spent[i]], seats[spent[j]]) })
 	return leadFirst(seats, append(append(fine, low...), spent...))
 }}

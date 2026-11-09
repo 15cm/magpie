@@ -15,7 +15,7 @@ import (
 	"github.com/yetone/magpie/internal/provider"
 )
 
-const poolUsage = "magpie provider pool <id> [--accounts a,b,…] [--cap percent|off] [--stop on|off] [--careful on|off]"
+const poolUsage = "magpie provider pool <id> [--accounts a,b,…] [--cap percent|off] [--stop on|off] [--careful on|off] [--backup-5h on|off]"
 
 // poolCmd shows a subscription's pool, after setting what the flags say:
 // --accounts puts those accounts in use in that order, the rest out of
@@ -30,7 +30,7 @@ func poolCmd(rest []string) error {
 	var accounts []string
 	accountsSet, capSet := false, false
 	capN := 0
-	var stop, careful *bool
+	var stop, careful, backup *bool
 	onOff := func(v string) (*bool, error) {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "on", "true", "yes":
@@ -80,6 +80,8 @@ func poolCmd(rest []string) error {
 			stop, err = onOff(val)
 		case "--careful":
 			careful, err = onOff(val)
+		case "--backup-5h":
+			backup, err = onOff(val)
 		default:
 			return usage
 		}
@@ -175,7 +177,12 @@ func poolCmd(rest []string) error {
 			return err
 		}
 	}
-	if accountsSet || capSet || stop != nil || careful != nil {
+	if backup != nil {
+		if err := provider.SetBackupNoFiveHour(p.ID, *backup); err != nil {
+			return err
+		}
+	}
+	if accountsSet || capSet || stop != nil || careful != nil || backup != nil {
 		fmt.Println(green.Render("✓"), "saved", p.Name, muted.Render("("+p.ID+")"))
 		if p, err = provider.Find(p.ID); err != nil {
 			return err
@@ -225,6 +232,9 @@ func printPool(p provider.Provider, ls []provider.Login) {
 				uncapped++
 			}
 		}
+		if p.AccountBackupMode(l.User) != "" {
+			capText += " · " + accountBackupText(p, l.User)
+		}
 		fmt.Printf("%d. %s %s · %s\n", i+1, mark, l.User, capText)
 	}
 	stop := "on: a request is answered 429 while every account in use is at its cap"
@@ -238,6 +248,11 @@ func printPool(p provider.Provider, ls []provider.Login) {
 	if !p.CapCareful {
 		careful = "off: routing goes by the last reading, read again each minute"
 	}
+	backup := "off"
+	if p.BackupNoFiveHour {
+		backup = "on"
+	}
+	fmt.Println("backup without 5h limit ·", backup)
 	fmt.Println("stop at caps ·", stop)
 	fmt.Println("check usage near the cap ·", careful)
 	if uncapped > 0 {

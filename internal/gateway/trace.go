@@ -308,7 +308,8 @@ type SeatPrice struct {
 
 // Weighed is one account or key as routing weighed it.
 type Weighed struct {
-	ID       string  `json:"id"` // what rests after a failure
+	Backup   bool    `json:"backup,omitempty"` // kept behind primary accounts under Smart
+	ID       string  `json:"id"`               // what rests after a failure
 	Provider string  `json:"provider"`
 	Name     string  `json:"name"` // the provider's
 	Icon     string  `json:"icon,omitempty"`
@@ -580,7 +581,7 @@ type planned struct {
 
 func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from provider.Protocol) Weighed {
 	w := Weighed{ID: c.rest, Provider: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Model: c.model, Fixed: c.effort, Fast: c.fast,
-		Routing: p.Routing, Fallback: fallback, Shared: c.rest != p.ID, Rank: c.rank, NoURL: c.noURL, Reserve: c.reserve, UseFirst: c.p.UseFirst}
+		Backup: wg.backup[c.allowanceKey()] && routingOf(p.Routing) == "", Routing: p.Routing, Fallback: fallback, Shared: c.rest != p.ID, Rank: c.rank, NoURL: c.noURL, Reserve: c.reserve, UseFirst: c.p.UseFirst}
 	switch {
 	case c.p.Account != nil:
 		w.Kind, w.Who, w.Agent, w.Plan = "account", c.p.Account.User, c.p.Account.Agent, c.p.Account.Plan

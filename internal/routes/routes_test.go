@@ -287,3 +287,27 @@ func TestSmartLeadFirst(t *testing.T) {
 		t.Fatalf("Smart with none set: %v, want %v", got, want)
 	}
 }
+
+func TestSmartBackupAccounts(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name  string
+		seats []Seat
+		want  []int
+	}{
+		{"unused backup waits", []Seat{{Backup: true, Account: true, Known: true, Soon: []time.Time{now.Add(72 * time.Hour)}}, {Account: true, Known: true, Used: 25, Soon: []time.Time{now.Add(120 * time.Hour)}}}, []int{1, 0}},
+		{"backup before low and spent", []Seat{{Used: 90}, {Backup: true, Used: 10}, {Used: 98}}, []int{1, 0, 2}},
+		{"smart among backups", []Seat{{Backup: true, Used: 10, Soon: []time.Time{now.Add(96 * time.Hour)}}, {Backup: true, Used: 5, Soon: []time.Time{now.Add(72 * time.Hour)}}}, []int{1, 0}},
+		{"unused backups by tokens", []Seat{{Backup: true, Account: true, Known: true, Tokens: 50, Soon: []time.Time{now}}, {Backup: true, Account: true, Known: true, Tokens: 10, Soon: []time.Time{now}}}, []int{1, 0}},
+		{"manual learner stays behind primary", []Seat{{Backup: true, Learns: true}, {Used: 25}}, []int{1, 0}},
+		{"learner within backup tier", []Seat{{Backup: true, Used: 25}, {Backup: true, Learns: true}, {Used: 25}}, []int{2, 1, 0}},
+		{"low primary before low backup", []Seat{{Backup: true, Used: 90}, {Used: 95}}, []int{1, 0}},
+		{"weekly low primary keeps room", []Seat{{Backup: true, Used: 10}, {Used: 95, WeekLow: true}}, []int{1, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Smart.Order("backup", tc.seats); !slices.Equal(got, tc.want) {
+				t.Fatalf("order %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

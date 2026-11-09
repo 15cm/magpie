@@ -187,3 +187,67 @@ func TestNextTakesAccountsThatAreOff(t *testing.T) {
 		})
 	}
 }
+
+// A usable backup spare waits for a usable primary, even when saved first.
+func TestNextLoginPrefersPrimaryBeforeBackup(t *testing.T) {
+	for _, agent := range []string{"codex", "claude"} {
+		t.Run(agent, func(t *testing.T) {
+			threeAccounts(t, agent)
+			var spare []string
+			active := ""
+			for _, l := range Logins(agent) {
+				if l.Active {
+					active = l.User
+				} else {
+					spare = append(spare, l.User)
+				}
+			}
+			if len(spare) != 2 || active == "" {
+				t.Fatal("need active and two spares")
+			}
+			if err := SetAccountBackup(agent, spare[0], "backup"); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { LoginUsageVia(nil) })
+			for _, tc := range []struct {
+				name    string
+				primary float64
+				cap     int
+				want    string
+			}{
+				{"primary has room", 20, 0, spare[1]}, {"primary spent", 98, 0, spare[0]}, {"primary capped", 20, 15, spare[0]},
+			} {
+				if err := SetAccountCap(agent, spare[1], tc.cap); err != nil {
+					t.Fatal(err)
+				}
+				LoginUsageVia(usedAt(agent, map[string]float64{active: 100, spare[0]: 10, spare[1]: tc.primary}))
+				from, to, back, ok := NextLogin(context.Background(), agent)
+				if !ok || back || from != active || to != tc.want {
+					t.Errorf("%s: %s → %s back=%v ok=%v; want %s", tc.name, from, to, back, ok, tc.want)
+				}
+			}
+			if err := SetAccountCap(agent, spare[1], 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := SetAccountBackup(agent, spare[0], "auto"); err != nil {
+				t.Fatal(err)
+			}
+			if err := SetBackupNoFiveHour(agent, true); err != nil {
+				t.Fatal(err)
+			}
+			due := time.Now().Add(96 * time.Hour)
+			LoginUsageVia(func(ctx context.Context, ag string) map[string]SubscriptionQuota {
+				qs := usedAt(agent, map[string]float64{active: 100, spare[1]: 20})(ctx, ag)
+				qs[spare[0]] = SubscriptionQuota{Provider: agent, User: spare[0], Windows: []QuotaWindow{{Name: "weekly", Used: 10, Span: 7 * 24 * time.Hour, ResetsAt: &due}}}
+				return qs
+			})
+			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[1] {
+				t.Fatalf("automatic backup: chose %s, want %s", to, spare[1])
+			}
+			due = time.Now().Add(20 * time.Hour)
+			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[0] {
+				t.Fatalf("promoted backup: chose %s, want %s", to, spare[0])
+			}
+		})
+	}
+}

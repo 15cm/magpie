@@ -478,6 +478,12 @@ type Provider struct {
 	// in lower case: past it, routing takes the account for used up until
 	// the window renews (see account_caps.go). One not in it has no cap.
 	AccountCaps map[string]int `json:"accountCaps,omitempty"`
+	// BackupNoFiveHour keeps accounts with a known budget and no short
+	// rate-cap window as Smart backups, unless promoted before reset.
+	BackupNoFiveHour bool `json:"backupNoFiveHour,omitempty"`
+	// AccountBackup overrides Smart backup classification by account name
+	// in lower case: "backup" or "primary"; absent follows automatic detection.
+	AccountBackup map[string]string `json:"accountBackup,omitempty"`
 	// AccountWindowCaps is, for a subscription, the share of each usage
 	// window an account is used to at most where the user set one for that
 	// window apart (willz on Discord), by the account's name in lower case
@@ -895,6 +901,7 @@ func (p Provider) clone() Provider {
 	p.PassHeaders = slices.Clone(p.PassHeaders)
 	p.AccountProxies = maps.Clone(p.AccountProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
+	p.AccountBackup = maps.Clone(p.AccountBackup)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
@@ -1012,6 +1019,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.Unredacted = pk.Unredacted
 	a.Proxy, a.AccountProxies, a.AccountModels, a.AccountModelsAll = pk.Proxy, pk.AccountProxies, pk.AccountModels, pk.AccountModelsAll
 	a.AccountCaps, a.AccountWindowCaps = pk.AccountCaps, pk.AccountWindowCaps
+	a.BackupNoFiveHour, a.AccountBackup = pk.BackupNoFiveHour, pk.AccountBackup
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
 	a.UseFirst = pk.UseFirst
 	a.AccountNames = pk.AccountNames
@@ -1676,6 +1684,7 @@ func normalize(p Provider) Provider {
 	p.AccountModels = normalAccountModels(p.AccountModels)
 	p.AccountModelsAll = normalModelsAll(p.AccountModelsAll, p.AccountModels)
 	p.AccountCaps = normalAccountCaps(p.AccountCaps)
+	p.AccountBackup = normalAccountBackup(p.AccountBackup)
 	p.AccountWindowCaps = normalWindowCaps(p.AccountWindowCaps)
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)

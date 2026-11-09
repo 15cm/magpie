@@ -830,6 +830,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 			}
 			w := weighed(c, u.m.Provider, wg, false, from)
 			w.Routing, w.Via = g.Routing, u.m.Groups()
+			w.Backup = wg.backup[c.allowanceKey()] && routingOf(g.Routing) == ""
 			w.Sunk = nil // weighed as the group's, whose own Sink tells
 			w.Turn = i == 0 && routingOf(g.Routing) == provider.Rotate && len(weighedHeads) > 1
 			pl.order = append(pl.order, w)

@@ -25,6 +25,9 @@ type Seat struct {
 	Key string
 	// Account is a subscription's account, not an API key
 	Account bool
+	// Backup keeps a Smart seat behind primary seats with room, ahead of
+	// seats running low or spent, with Smart ordering within each tier.
+	Backup bool
 	// Known: its allowance is known. Used, Soon and Pace are read from it
 	Known bool
 	// Learns: an account not known yet, of an agent that tells what it has

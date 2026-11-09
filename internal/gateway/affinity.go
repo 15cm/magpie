@@ -836,7 +836,7 @@ func leastHeld(scope, key string, cs []candidate, pl planned, ready bool) ([]can
 	seat := func(c candidate) string { return c.who() + "/" + provider.WithMemberEffort(c.model, c.effort) }
 	best := -1
 	for i, c := range cs {
-		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) || lastBehind(pl.order, i) || busyBehind(pl.order, i) || ready && i > 0 && !readyForNew(pl.order, i) {
+		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) || lastBehind(pl.order, i) || busyBehind(pl.order, i) || backupBehind(pl.order, i) || ready && i > 0 && !readyForNew(pl.order, i) {
 			continue
 		}
 		if best < 0 || held[seat(c)] < held[seat(cs[best])] {
@@ -864,7 +864,13 @@ func leastHeld(scope, key string, cs []candidate, pl planned, ready bool) ([]can
 // with those that have room (Weighed.WeekLow).
 func readyForNew(order []Weighed, i int) bool {
 	w := order[i]
-	return w.Rest == nil && !w.Aside && !standsIn(order, i) && !(w.Known && w.Used >= lowShare && !w.CreditsFirst && !(w.WeekLow && w.Used < usedShare)) && !lastBehind(order, i) && !busyBehind(order, i)
+	return w.Rest == nil && !w.Aside && !standsIn(order, i) && !(w.Known && w.Used >= lowShare && !w.CreditsFirst && !(w.WeekLow && w.Used < usedShare)) && !lastBehind(order, i) && !busyBehind(order, i) && !backupBehind(order, i)
+}
+
+// backupBehind says whether a Smart backup is behind a primary lead.
+// Spreading conversations or taking turns must not bring it past that lead.
+func backupBehind(order []Weighed, i int) bool {
+	return i > 0 && i < len(order) && order[i].Backup && !order[0].Backup
 }
 
 // standsIn says whether order[i] is a provider's fallback while one of the
@@ -1042,7 +1048,7 @@ func spreadsSessions(mode, routing string) bool {
 func after(cs []candidate, pl planned, at int) ([]candidate, planned) {
 	for d := 1; d < len(cs); d++ {
 		i := (at + d) % len(cs)
-		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) || lastBehind(pl.order, i) || busyBehind(pl.order, i) {
+		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) || lastBehind(pl.order, i) || busyBehind(pl.order, i) || backupBehind(pl.order, i) {
 			continue // a turn goes round the keys routed over only
 		}
 		if i > 0 {

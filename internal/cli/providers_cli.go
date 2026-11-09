@@ -81,6 +81,8 @@ const providerUsage = `usage:
                                           now, and each one a later fetch newly lists; picks are only added to
   magpie provider account-models <id> [account|key [ids…|all]]
                                           the models one account or key alone serves; all: every model the provider has
+  magpie provider account-backup <id> [account [backup|primary|auto]]
+  magpie provider set <id> backup-5h=on|off
   magpie provider account-cap <id> [account [percent|off]]
                                           use a subscription account up to a share of each usage window (e.g. 70):
                                           at it, routing takes the account for used up until the window renews
@@ -644,6 +646,8 @@ func providerCmd(args []string) error {
 		return nil
 	case "account-models", "account-model":
 		return accountModelsCmd(rest)
+	case "account-backup", "account-backups":
+		return accountBackupCmd(rest)
 	case "account-cap", "account-caps":
 		return accountCapCmd(rest)
 	case "pool":
@@ -1033,6 +1037,18 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			return fmt.Errorf("%s is asked at its Google Cloud project's own address: project= and location= say where", p.Name)
 		}
 		switch strings.ToLower(k) {
+		case "backup-5h", "backup-no-5h":
+			if p.Account == nil {
+				return fmt.Errorf("%s has keys, not subscription accounts", p.Name)
+			}
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "on", "true", "yes":
+				p.BackupNoFiveHour = true
+			case "off", "false", "no":
+				p.BackupNoFiveHour = false
+			default:
+				return fmt.Errorf("%q: on or off", v)
+			}
 		case "id":
 			p.ID = v
 		case "name":
@@ -2324,4 +2340,55 @@ func patienceArg(v string) (int, error) {
 		return 0, fmt.Errorf("patience is at most %s, not %q", provider.PatienceLongest*time.Second, v)
 	}
 	return int((d + time.Second - 1) / time.Second), nil
+}
+
+// accountBackupCmd shows or sets an account's manual Smart backup mode.
+func accountBackupCmd(rest []string) error {
+	if len(rest) < 1 || len(rest) > 3 {
+		return fmt.Errorf("magpie provider account-backup <id> [account [backup|primary|auto]]")
+	}
+	p, err := provider.Find(rest[0])
+	if err != nil {
+		return err
+	}
+	if p.Account == nil {
+		return fmt.Errorf("%s has keys, not subscription accounts", p.Name)
+	}
+	if len(rest) == 3 {
+		mode, err := provider.ParseAccountBackup(rest[2])
+		if err != nil {
+			return err
+		}
+		if err := provider.SetAccountBackup(p.ID, rest[1], mode); err != nil {
+			return err
+		}
+		if p, err = provider.Find(p.ID); err != nil {
+			return err
+		}
+	}
+	refs := p.AccountRefs()
+	if len(rest) > 1 {
+		r, ok := p.AccountRefOf(rest[1])
+		if !ok {
+			return fmt.Errorf("%s has no account %q", p.Name, rest[1])
+		}
+		refs = []string{r}
+	}
+	if len(refs) == 0 {
+		fmt.Println(muted.Render(p.Name + " has no account"))
+	}
+	for _, r := range refs {
+		fmt.Printf("%s · %s\n", r, accountBackupText(*p, r))
+	}
+	return nil
+}
+
+func accountBackupText(p provider.Provider, user string) string {
+	if m := p.AccountBackupMode(user); m != "" {
+		return m
+	}
+	if p.BackupNoFiveHour {
+		return "auto (backup when no 5-hour window)"
+	}
+	return "auto"
 }
