@@ -1,6 +1,6 @@
 # Premium GPT weekly usage tiers for primary-pool admission
 
-Status: **Approved by the user** via “Approve plan and hand off.” Ready for implementation handoff to the orchestrator. This design tab does not implement or commit.
+Status: **T1 implemented; awaiting independent review and V2–V5 verification.** The approved design below remains the contract. Focused T1 verification passes; the baseline regression fails both named assertions on the inspected base. Evidence is recorded in the run’s authoritative `t1-implement-result.md`. GUI/API runtime tests and sandbox E2E are excluded under AGENTS.md. No commit was made.
 
 Workspace: `/home/sinkerine/.paseo/worktrees/33uo4m1c/sordid-bird` (`wks_069ad8f9d92c81ec`), branch `sordid-bird`. Inspected base: `ea728dcc9416d2f91af0922ed2eb6a152502ca75`; Paseo base ref: `refs/remotes/origin/main` (`main`). Do not edit `/home/sinkerine/dev/magpie`. This document is the only design deliverable; do not implement or commit in the design phase.
 

@@ -236,17 +236,96 @@ func TestNextLoginPrefersPrimaryBeforeBackup(t *testing.T) {
 				t.Fatal(err)
 			}
 			due := time.Now().Add(96 * time.Hour)
+			weeklyUsed := 50.0
+			extra := []QuotaWindow{}
+			held := false
+			missing, modelOnly := false, false
 			LoginUsageVia(func(ctx context.Context, ag string) map[string]SubscriptionQuota {
 				qs := usedAt(agent, map[string]float64{active: 100, spare[1]: 20})(ctx, ag)
-				qs[spare[0]] = SubscriptionQuota{Provider: agent, User: spare[0], Windows: []QuotaWindow{{Name: "weekly", Used: 10, Span: 7 * 24 * time.Hour, ResetsAt: &due}}}
+				windows := append([]QuotaWindow{{Name: "weekly", Used: weeklyUsed, Span: 7 * 24 * time.Hour, ResetsAt: &due}}, extra...)
+				if modelOnly {
+					windows = extra
+				}
+				if !missing {
+					qs[spare[0]] = SubscriptionQuota{Provider: agent, User: spare[0], Windows: windows, Held: held}
+				}
 				return qs
 			})
-			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[1] {
-				t.Fatalf("automatic backup: chose %s, want %s", to, spare[1])
+			for _, explicit := range []bool{false, true} {
+				mode := "auto"
+				if explicit {
+					mode = "backup"
+				}
+				if err := SetAccountBackup(agent, spare[0], mode); err != nil {
+					t.Fatal(err)
+				}
+				for _, tc := range []struct {
+					name, policy string
+					used         float64
+					lead         time.Duration
+					promote      bool
+				}{
+					{"default fails", "default", 50, 4 * 24 * time.Hour, false},
+					{"default low week", "default", 10, 6 * 24 * time.Hour, true},
+					{"default last tier", "default", 70, 20 * time.Hour, true},
+					{"old near reset only", "default", 85, 20 * time.Hour, false},
+					{"old pace only", "default", 90, 4 * time.Hour, false},
+					{"custom", "15.5:6.5", 15, 6 * 24 * time.Hour, true},
+					{"custom fails", "15.5:2.5", 15, 6 * 24 * time.Hour, false},
+					{"off", "off", 0, 20 * time.Hour, false},
+					{"spent", "100:7", 98, 20 * time.Hour, false},
+				} {
+					tiers, err := ParseBackupUsageTiers(tc.policy)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := SetBackupUsageTiers(agent, tiers); err != nil {
+						t.Fatal(err)
+					}
+					weeklyUsed = tc.used
+					due = time.Now().Add(tc.lead)
+					want := spare[1]
+					if tc.promote {
+						want = spare[0]
+					}
+					if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != want {
+						t.Fatalf("explicit=%v %s: chose %s want %s", explicit, tc.name, to, want)
+					}
+				}
 			}
-			due = time.Now().Add(20 * time.Hour)
+			if err := SetBackupUsageTiers(agent, nil); err != nil {
+				t.Fatal(err)
+			}
+			weeklyUsed = 10
+			due = time.Now().Add(6 * 24 * time.Hour)
+			// A named model's spent week does not block a shared model-less week.
+			extra = []QuotaWindow{{Name: "model weekly", Model: "fable", Used: 100, Span: 7 * 24 * time.Hour, ResetsAt: &due}}
 			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[0] {
-				t.Fatalf("promoted backup: chose %s, want %s", to, spare[0])
+				t.Fatal("model-specific quota leaked into switch")
+			}
+			held = true
+			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[1] {
+				t.Fatal("held promoted spare selected")
+			}
+			held = false
+			if err := SetAccountCap(agent, spare[0], 5); err != nil {
+				t.Fatal(err)
+			}
+			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[1] {
+				t.Fatal("capped promoted spare selected")
+			}
+			if err := SetAccountCap(agent, spare[0], 0); err != nil {
+				t.Fatal(err)
+			}
+			missing = true
+			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[1] {
+				t.Fatal("unknown spare selected")
+			}
+			missing = false
+			modelOnly = true
+			extra = []QuotaWindow{{Name: "model weekly", Model: "fable", Used: 10, Span: 7 * 24 * time.Hour, ResetsAt: &due}}
+			if _, to, _, ok := NextLogin(context.Background(), agent); !ok || to != spare[1] {
+				t.Fatal("model-specific week earned model-less promotion")
 			}
 		})
 	}

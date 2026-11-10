@@ -169,9 +169,11 @@ type providerJSON struct {
 	AccountProxies map[string]string `json:"accountProxies,omitempty"`
 	// the models each account or key the user narrowed serves alone, by
 	// its name in lower case or its key's id (#474); the others serve all
-	AccountModels    map[string][]string `json:"accountModels,omitempty"`
-	BackupNoFiveHour bool                `json:"backupNoFiveHour,omitempty"`
-	AccountBackup    map[string]string   `json:"accountBackup,omitempty"`
+	AccountModels           map[string][]string         `json:"accountModels,omitempty"`
+	BackupNoFiveHour        bool                        `json:"backupNoFiveHour,omitempty"`
+	BackupUsageTiers        *[]provider.BackupUsageTier `json:"backupUsageTiers"`
+	BackupUsageTiersDefault []provider.BackupUsageTier  `json:"backupUsageTiersDefault,omitempty"`
+	AccountBackup           map[string]string           `json:"accountBackup,omitempty"`
 	// the usage cap each account the user capped is held at, in percent
 	// of its windows, by its name in lower case (provider.AccountCaps)
 	AccountCaps map[string]int `json:"accountCaps,omitempty"`
@@ -766,7 +768,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		ID: p.ID, Name: p.Name, Icon: p.Icon, IconFrom: p.IconFrom, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
-		BackupNoFiveHour: p.BackupNoFiveHour, AccountBackup: p.AccountBackup,
+		BackupNoFiveHour: p.BackupNoFiveHour, AccountBackup: p.AccountBackup, BackupUsageTiers: p.BackupUsageTiers,
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), HTTP1: p.HTTP1, LimitRestOff: p.LimitRestOff, ImageFilesOff: p.ImageFilesOff, TakesImageFiles: p.TakesImageFiles(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: !p.MagpieUserAgent, OwnClient: p.OwnClient(), PassErrors: p.PassErrors, TakesPassErrors: p.TakesPassErrors(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL, ListOff: p.ListsOff(), TakesListOff: p.Account == nil && !p.IsPlugin() && !p.DecideOnly(), TakesModelHeaders: p.Account == nil, DecideAPIKind: p.DecideAPIKind(),
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
 		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, UseFirst: p.UseFirst, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
@@ -776,6 +778,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
 	}
 	if p.Account != nil {
+		out.BackupUsageTiersDefault = provider.DefaultBackupUsageTiers()
 		for _, r := range p.AccountRefs() {
 			if s := provider.SeatNameOf(p.ID, r); s != "" {
 				if out.AccountSeats == nil {
@@ -1656,6 +1659,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			Account string   `json:"account"`
 			Allow   []string `json:"allow"`
 			Backup  string   `json:"backup"`
+			// Only the dedicated action edits this field; RawMessage keeps
+			// omission distinct from an explicit null restoring defaults.
+			BackupUsageTiers json.RawMessage `json:"backupUsageTiers"`
 			// Cap, for accountcap: the share (1–99) of its windows the
 			// account is used to at most, 0 for no cap; for windowcap, the
 			// share of Window alone (1–99, 100 for none on it), 0 to have
@@ -2090,6 +2096,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if old != nil {
 					in.AccountModels, in.AccountModelsAll = old.AccountModels, old.AccountModelsAll
 					in.BackupNoFiveHour, in.AccountBackup = old.BackupNoFiveHour, old.AccountBackup
+					in.BackupUsageTiers = old.BackupUsageTiers
 				}
 				// and their usage caps, with accountcap and windowcap, their
 				// limits on requests at once, with accountconcurrency, and
@@ -2355,6 +2362,20 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				return
 			}
 			if err := provider.SetAccountBackup(in.ID, req.Account, mode); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "backupusagetiers":
+			if len(req.BackupUsageTiers) == 0 {
+				fail(rw, fmt.Errorf("backupUsageTiers is required"))
+				return
+			}
+			var tiers *[]provider.BackupUsageTier
+			if err := json.Unmarshal(req.BackupUsageTiers, &tiers); err != nil {
+				fail(rw, err)
+				return
+			}
+			if err := provider.SetBackupUsageTiers(in.ID, tiers); err != nil {
 				fail(rw, err)
 				return
 			}

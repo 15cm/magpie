@@ -1,8 +1,13 @@
 package provider
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,12 +19,113 @@ const (
 	AccountBackupPrimary = "primary"
 )
 
-// BackupPromotePace and BackupPromoteLead promote remaining budget to the
-// primary tier before a reset would waste it.
-const (
-	BackupPromotePace = 2.0
-	BackupPromoteLead = 24 * time.Hour
-)
+// BackupUsageTier admits a backup within both inclusive weekly thresholds.
+type BackupUsageTier struct {
+	MaxUsed      float64 `json:"maxUsed"`
+	MaxResetDays float64 `json:"maxResetDays"`
+}
+
+func DefaultBackupUsageTiers() []BackupUsageTier {
+	return []BackupUsageTier{{20, 7}, {40, 5}, {60, 3}, {80, 1}}
+}
+
+func copyBackupUsageTiers(tiers *[]BackupUsageTier) *[]BackupUsageTier {
+	if tiers == nil {
+		return nil
+	}
+	out := append([]BackupUsageTier{}, (*tiers)...)
+	return &out
+}
+
+// BackupPromotionTiers returns an owned effective policy; invalid saved values
+// earn no promotion, while remaining available for repair in the editor.
+func (p Provider) BackupPromotionTiers() []BackupUsageTier {
+	if p.BackupUsageTiers == nil {
+		return DefaultBackupUsageTiers()
+	}
+	if CheckBackupUsageTiers(*p.BackupUsageTiers) != nil {
+		return []BackupUsageTier{}
+	}
+	return *copyBackupUsageTiers(p.BackupUsageTiers)
+}
+
+func finite(n float64) bool { return !math.IsNaN(n) && !math.IsInf(n, 0) }
+
+func CheckBackupUsageTiers(tiers []BackupUsageTier) error {
+	for i, t := range tiers {
+		if !finite(t.MaxUsed) || t.MaxUsed < 0 || t.MaxUsed > 100 {
+			return fmt.Errorf("weekly promotion tier %d: maxUsed must be a finite percentage from 0 to 100", i+1)
+		}
+		if !finite(t.MaxResetDays) || t.MaxResetDays <= 0 || t.MaxResetDays > 7 || time.Duration(t.MaxResetDays*float64(24*time.Hour)) < time.Nanosecond {
+			return fmt.Errorf("weekly promotion tier %d: maxResetDays must be greater than 0 and at most 7 days, representing at least 1ns", i+1)
+		}
+	}
+	return nil
+}
+
+// UnmarshalJSON rejects incomplete rows instead of treating missing fields as 0.
+// Range checks are separate so invalid numeric disk settings can be repaired.
+func (t *BackupUsageTier) UnmarshalJSON(data []byte) error {
+	var row struct {
+		MaxUsed      *float64 `json:"maxUsed"`
+		MaxResetDays *float64 `json:"maxResetDays"`
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&row); err != nil {
+		return err
+	}
+	if row.MaxUsed == nil || row.MaxResetDays == nil {
+		return fmt.Errorf("weekly promotion tier needs numeric maxUsed and maxResetDays")
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("unexpected content after weekly promotion tier")
+	}
+	*t = BackupUsageTier{*row.MaxUsed, *row.MaxResetDays}
+	return nil
+}
+
+func ParseBackupUsageTiers(s string) (*[]BackupUsageTier, error) {
+	s = strings.TrimSpace(s)
+	switch s {
+	case "default":
+		return nil, nil
+	case "off":
+		return copyBackupUsageTiers(new([]BackupUsageTier)), nil
+	}
+	tiers := []BackupUsageTier{}
+	for _, row := range strings.Split(s, ",") {
+		u, days, ok := strings.Cut(row, ":")
+		if !ok {
+			return nil, fmt.Errorf("weekly promotion tiers use used:days pairs, off or default")
+		}
+		used, err := strconv.ParseFloat(strings.TrimSpace(u), 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid weekly usage: %q", u)
+		}
+		reset, err := strconv.ParseFloat(strings.TrimSpace(days), 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid reset days: %q", days)
+		}
+		tiers = append(tiers, BackupUsageTier{used, reset})
+	}
+	if err := CheckBackupUsageTiers(tiers); err != nil {
+		return nil, err
+	}
+	return &tiers, nil
+}
+
+func SetBackupUsageTiers(id string, tiers *[]BackupUsageTier) error {
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	if p.Account == nil {
+		return fmt.Errorf("%s has keys, not subscription accounts", p.Name)
+	}
+	p.BackupUsageTiers = copyBackupUsageTiers(tiers)
+	return Save(*p)
+}
 
 // AccountBackupMode is the account user's manual Smart backup override.
 func (p Provider) AccountBackupMode(user string) string {
@@ -120,10 +226,36 @@ func (a Allowance) LacksShortWindow(model string, now time.Time) bool {
 	return budget
 }
 
-// BackupPromoted reports quota left with a known future budget reset and
-// either enough remaining pace or a reset within BackupPromoteLead.
-func BackupPromoted(used, pace float64, due, now time.Time) bool {
-	return used < SpentShare && due.After(now) && (pace >= BackupPromotePace || due.Sub(now) <= BackupPromoteLead)
+// BackupPromoted checks paired usage and elapsed time for any configured tier.
+func BackupPromoted(used float64, due, now time.Time, tiers []BackupUsageTier) bool {
+	if !finite(used) || used < 0 || used > 100 || used >= SpentShare || !due.After(now) || CheckBackupUsageTiers(tiers) != nil {
+		return false
+	}
+	for _, tier := range tiers {
+		if used <= tier.MaxUsed && due.Sub(now) <= time.Duration(tier.MaxResetDays*float64(24*time.Hour)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a Allowance) backupUsagePromoted(model string, now time.Time, tiers []BackupUsageTier) bool {
+	used, _ := a.For(model, now)
+	if !finite(used) || used >= SpentShare || len(tiers) == 0 {
+		return false
+	}
+	model = strings.ToLower(model)
+	found := false
+	for _, l := range a {
+		if !l.applies(model) || l.Span != weekSpan {
+			continue
+		}
+		found = true
+		if l.partial || l.Balance != nil || !BackupPromoted(l.Used, l.Resets, now, tiers) {
+			return false
+		}
+	}
+	return found
 }
 
 // IsBackupAccount classifies user for Smart routing of model at now.
@@ -140,22 +272,8 @@ func (p Provider) IsBackupAccount(user, model string, a Allowance, known bool, n
 			return false
 		}
 	}
-	if known {
-		// Pace also falls back to short windows and wallets. Only a
-		// complete budget window's future reset can promote a backup.
-		var budget Allowance
-		for _, l := range a {
-			if l.applies(strings.ToLower(model)) && l.Span >= budgetSpan && l.Balance == nil && !l.partial {
-				budget = append(budget, l)
-			}
-		}
-		if len(budget) > 0 {
-			u, _ := a.For(model, now)
-			pace, due := budget.Pace(model, now)
-			if BackupPromoted(u, pace, due, now) {
-				return false
-			}
-		}
+	if known && a.backupUsagePromoted(model, now, p.BackupPromotionTiers()) {
+		return false
 	}
 	return true
 }

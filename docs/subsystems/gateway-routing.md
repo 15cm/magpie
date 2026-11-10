@@ -75,22 +75,33 @@ have different classifications. The trace's `Weighed.Backup`
 ([`trace.go`](../../internal/gateway/trace.go)) is `backup: true` only for a
 current backup weighed under Smart, including pooled group heads in
 `planLevel` ([`fallback.go`](../../internal/gateway/fallback.go)). A backup
-promoted before its budget reset has no backup mark for that request;
+admitted by its provider's weekly tiers has no backup mark for that request;
 promotion changes neither its saved override nor the provider's setting.
+Each candidate's own Provider and requested model determine admission in
+direct and pooled requests, including shared plus model-specific weekly
+windows; a synthetic group Provider never supplies a member's policy.
+The defaults replace the former pace/24-hour shortcut even for existing
+providers: 10%/6d promotes, 85%/20h stays backup. The exact formula,
+validation and absent/custom/off states are defined in the owning reference.
 
 Affinity runs after weighing. With Stays: Auto, an existing conversation
 on a backup keeps its warm cache (`Why: "cache"`), even when a primary
-account resets and leads again. The normal cache requirements (under five
-minutes old and at least 1,024 tokens) and 98% spent threshold still apply;
+account resets and leads again, or a tier policy edit promotes/demotes the
+account. The normal cache requirements (at least 1,024 tokens and the
+`coldAfter` lifetime: five minutes generally, **one hour for ChatGPT**, plus
+existing vendor/hour-cache exceptions) and 98% spent threshold still apply;
 new and cold-cache conversations follow the new primary lead. The existing
 group stand-in rules still apply when the conversation crossed members.
 In [`affinity.go`](../../internal/gateway/affinity.go), `backupBehind`
 prevents `readyForNew`, `leastHeld` and `after` from spreading a conversation
 onto a backup while a primary leads. Once a backup leads, sessions can
 spread across usable backups normally. Session and Strict retain their
-existing conversation guarantees.
+existing conversation guarantees. Off and Within a turn continue to route
+new turns afresh; policy saves never clear affinity or quota caches.
 
-`TestGatewayBackupRouting`, `TestGatewayBackupWarmCacheAndRecovery`,
+`TestGatewayBackupUsageTiers`, `TestGatewayBackupUsagePolicyChange`,
+`TestGatewayBackupUsageWeeklyScope`, `TestGatewayBackupRouting`,
+`TestGatewayBackupWarmCacheAndRecovery`,
 `TestGatewayBackupSessionSpreading`, `TestGatewayBackupModelWindows` and
 `TestGatewayBackupGroupModelWindows` in
 [`account_backup_test.go`](../../internal/gateway/account_backup_test.go)

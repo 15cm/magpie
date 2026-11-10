@@ -107,23 +107,56 @@ the existing learn-on-answer probe can read it; a manual backup stays
 backup while unknown. Classification is per model, not inferred from a
 plan's name.
 
-A configured backup is temporarily promoted to primary when it has less
-than 98% used for the model and a complete, non-wallet budget window with a
-known future reset, and either its remaining pace is at least 2.0 percentage
-points per hour (`BackupPromotePace`) or its reset is within 24 hours
-(`BackupPromoteLead`). `IsBackupAccount` filters to those budget windows
-before asking `Allowance.Pace`; a short-window or wallet reset cannot
-promote it. `BackupPromoted` checks the share, pace and reset boundary.
-An unstarted week with no reset time is not promoted. Promotion is computed
-at each look and never rewrites the configured mode; after a fresh reading
-or reset, the account can be backup again. Smart ordering, trace state and
-conversation affinity are owned by
+A configured backup competes as primary when every applicable weekly window
+matches at least one `BackupUsageTier`: **used <= maxUsed AND 0 < reset - now
+<= maxResetDays × 24 hours**. Rows are OR alternatives, independently for
+each window, with no ordering priority. The defaults from
+`DefaultBackupUsageTiers` are 20%/7d, 40%/5d, 60%/3d and 80%/1d. Shared
+and matching model-specific weeks all participate; other models do not.
+A week is exactly 168 hours (`weekSpan`), complete, non-wallet, with finite
+usage in [0,100] and a strictly future vendor reset. A missing, expired,
+exactly-now or unknown-reset week cannot earn admission; partial/wallet
+weeks cannot be skipped in favor of another complete week. Short/daily/
+monthly windows cannot promote. `Allowance.backupUsagePromoted` also keeps
+`Allowance.For`'s model-wide finite **<98%** guard. `BackupPromoted` checks
+paired usage/reset values for one window, never pace or alternative reset
+sources. `Allowance.Pace` and its other routing consumers are unchanged.
+
+`Provider.BackupUsageTiers` (`backupUsageTiers`) is a nullable pointer to a
+list. Absent or null uses defaults for existing and new providers, without
+startup writes; `[]` disables promotion; a nonempty list is custom. This
+replaces the former >=2 percentage-points/hour OR reset-within-24h rule
+for all users: 10% used with 6 days left now promotes; 85% used with 20 hours
+left stays backup. Old binaries ignore this field, revert to their old rule
+and may drop it on save; downgrade preservation is not promised.
+
+`CheckBackupUsageTiers` requires finite percentages in [0,100] and reset
+days in (0,7], representable as at least one nanosecond. Fractional days are
+elapsed 24-hour periods converted to `time.Duration`, truncated to ns.
+`BackupUsageTier.UnmarshalJSON` rejects null/incomplete/non-numeric rows,
+unknown members and trailing content. Syntactically valid numeric settings
+outside the range remain displayable for repair, but
+`BackupPromotionTiers` gives them no effective tiers. `Save` validates them
+before storage; `SetBackupUsageTiers` refuses key providers and copies its
+input. `clone` and `accountSettings` own pointer/slice copies and canonicalize
+pointer-to-nil slices to `[]`, preserving default/custom/off through stored
+picks, first/secondary account views, reload and unrelated saves. Account
+renames and provider display-name edits keep this provider-level policy.
+The shared reader's errors and last-good recovery remain authoritative;
+failed edits cannot turn an unreadable catalog into an empty one.
+`store`/`catalog.Touched` makes saves visible on subsequent looks, without
+clearing quota or affinity caches; in-flight requests may finish with their
+captured Provider.
+
+Promotion is computed at each look and never rewrites the configured mode.
+Smart ordering, trace state and conversation affinity are owned by
 [gateway routing](gateway-routing.md#smart-backup-accounts).
 
 When an active local Codex or Claude sign-in is spent or capped,
 `NextLogin` in [`codex_switch.go`](../../internal/provider/codex_switch.go)
 looks through readable spares with room for a current primary before
-choosing the first usable backup. Promotion counts here too. The switch
+choosing the first usable backup. It uses the same policy with model="":
+named model-specific windows cannot grant or block that view. The switch
 threshold and the fallback to the most room when every spare is past its
 line are unchanged; this preference does not change `NextInOrder`, the
 explicit `accounts switch … next` rotation.
@@ -134,14 +167,33 @@ The CLI exposes the configured policy through
 `magpie provider set <id> backup-5h=on|off` (`backup-no-5h` is an alias).
 Listing modes describes the saved policy, not whether a budget is promoted
 now. Invalid modes and key-based providers are refused before writing.
-See [`providers_cli.go`](../../internal/cli/providers_cli.go) and
+`magpie provider backup-usage-tiers <id> [default|off|used:days,...]` shows
+or sets promotion independently of those detection controls. Pool output
+shows the configured policy, not a live per-model result.
+See [`backup_usage_tiers_cli.go`](../../internal/cli/backup_usage_tiers_cli.go),
+[`providers_cli.go`](../../internal/cli/providers_cli.go) and
 [`pool_cli.go`](../../internal/cli/pool_cli.go).
+
+The subscription editor in [`acctbackup.js`](../../internal/gui/assets/acctbackup.js)
+provides add/remove/save rows, Disable promotion (`[]`) and Use defaults
+(null), using server defaults rather than a JavaScript copy.
+[`gui/providers.go`](../../internal/gui/providers.go) exposes saved
+`backupUsageTiers` and `backupUsageTiersDefault` on `/api/providers`.
+`POST /api/provider/backupusagetiers` requires an explicitly present
+`backupUsageTiers` property (null for defaults), strictly decodes rows and
+uses the shared setter; failures return 400 JSON `error`. The general
+provider Save preserves the saved policy regardless of its request body.
 
 Classification, promotion boundaries, persistence and rename behavior are
 covered by [`account_backup_test.go`](../../internal/provider/account_backup_test.go);
 `TestNextLoginPrefersPrimaryBeforeBackup` in
 [`switch_next_test.go`](../../internal/provider/switch_next_test.go) covers
-the local spare preference.
+the local spare preference. `TestBackupUsageTiersAccountViews` in
+[`account_settings_test.go`](../../internal/provider/account_settings_test.go)
+covers secondary views. `TestBackupUsageTiersCLI` in
+[`backup_usage_tiers_cli_test.go`](../../internal/cli/backup_usage_tiers_cli_test.go)
+covers real command dispatch. GUI/API handler runtime tests are excluded
+under AGENTS.md; their wiring receives source review only.
 
 ## Remote magpie
 

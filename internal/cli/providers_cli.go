@@ -82,6 +82,7 @@ const providerUsage = `usage:
   magpie provider account-models <id> [account|key [ids…|all]]
                                           the models one account or key alone serves; all: every model the provider has
   magpie provider account-backup <id> [account [backup|primary|auto]]
+  magpie provider backup-usage-tiers <id> [default|off|used:days,...]
   magpie provider set <id> backup-5h=on|off
   magpie provider account-cap <id> [account [percent|off]]
                                           use a subscription account up to a share of each usage window (e.g. 70):
@@ -646,6 +647,8 @@ func providerCmd(args []string) error {
 		return nil
 	case "account-models", "account-model":
 		return accountModelsCmd(rest)
+	case "backup-usage-tiers":
+		return backupUsageTiersCmd(rest)
 	case "account-backup", "account-backups":
 		return accountBackupCmd(rest)
 	case "account-cap", "account-caps":

@@ -481,6 +481,8 @@ type Provider struct {
 	// BackupNoFiveHour keeps accounts with a known budget and no short
 	// rate-cap window as Smart backups, unless promoted before reset.
 	BackupNoFiveHour bool `json:"backupNoFiveHour,omitempty"`
+	// BackupUsageTiers is nil for defaults, an empty list for no promotion.
+	BackupUsageTiers *[]BackupUsageTier `json:"backupUsageTiers,omitempty"`
 	// AccountBackup overrides Smart backup classification by account name
 	// in lower case: "backup" or "primary"; absent follows automatic detection.
 	AccountBackup map[string]string `json:"accountBackup,omitempty"`
@@ -902,6 +904,7 @@ func (p Provider) clone() Provider {
 	p.AccountProxies = maps.Clone(p.AccountProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
 	p.AccountBackup = maps.Clone(p.AccountBackup)
+	p.BackupUsageTiers = copyBackupUsageTiers(p.BackupUsageTiers)
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
@@ -1020,6 +1023,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.Proxy, a.AccountProxies, a.AccountModels, a.AccountModelsAll = pk.Proxy, pk.AccountProxies, pk.AccountModels, pk.AccountModelsAll
 	a.AccountCaps, a.AccountWindowCaps = pk.AccountCaps, pk.AccountWindowCaps
 	a.BackupNoFiveHour, a.AccountBackup = pk.BackupNoFiveHour, pk.AccountBackup
+	a.BackupUsageTiers = copyBackupUsageTiers(pk.BackupUsageTiers)
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
 	a.UseFirst = pk.UseFirst
 	a.AccountNames = pk.AccountNames
@@ -1141,6 +1145,12 @@ func Slug(name string) string {
 
 // Save adds or replaces a provider.
 func Save(p Provider) error {
+	if p.BackupUsageTiers != nil {
+		if err := CheckBackupUsageTiers(*p.BackupUsageTiers); err != nil {
+			return err
+		}
+		p.BackupUsageTiers = copyBackupUsageTiers(p.BackupUsageTiers)
+	}
 	// a key given a Vertex AI provider is refused here, before normalize
 	// drops it: it would never be sent
 	if p.IsVertex() && (strings.TrimSpace(p.Key) != "" || len(p.Keys) > 0) {
@@ -1192,6 +1202,9 @@ func Save(p Provider) error {
 		}
 		p = accountSettings(Provider{ID: p.ID, Key: key, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}, p)
 	} else {
+		if p.BackupUsageTiers != nil {
+			return fmt.Errorf("%s has keys, not subscription accounts", p.Name)
+		}
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
 			// taken, it would hide that subscription once signed in

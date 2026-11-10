@@ -2155,25 +2155,54 @@ budget renews, without changing the choice shown in the editor.
 
 Smart orders the primary accounts with room among themselves, then the
 backups with room among themselves, using its usual rules in each tier.
-Thus a fresh Premium backup at 0% waits behind a Standard primary at 25%.
+A backup that fails promotion waits behind a Standard primary with room;
+promotion lets it compete under those same rules.
 Once all primary accounts reach 90% of their short window, hit a configured
 usage cap or rest after an error, new conversations spill to usable backups
 before trying the primary accounts at 90–97%. A week alone can reach 97%
 and still count as having room; any window at 98% counts as spent. Other
 routing modes keep their existing ordering.
 
-To avoid wasting a backup's remaining weekly allowance, magpie temporarily
-promotes it to primary when it is under 98% used and its complete rolling
-budget has a known future reset, with either at least 2% of the budget left
-per hour until reset, or at most 24 hours until reset. For example, 80% left
-with 36 hours to go is about 2.22% per hour; 30% left with 20 hours to go
-qualifies by the 24-hour rule. A fresh week with no reset time, a short
-window and a wallet balance cannot trigger promotion. The promoted account
-competes under Smart's normal rules; it does not always go first. Its fresh
-week can become backup again after reset.
+The provider's **Weekly promotion tiers** let configured backups compete as
+primary when reported weekly usage **used <= X% AND reset is within <= N
+elapsed days** (one day is 24 hours). The defaults are:
+
+| Weekly usage used, at most | Reset within |
+| --- | --- |
+| 20% | 7 days |
+| 40% | 5 days |
+| 60% | 3 days |
+| 80% | 1 day |
+
+Any row may match. Every applicable weekly window, shared and specific to
+the requested model, must pass independently, possibly through different
+rows. Usage and reset must come from the same window. Fractional percentages
+and days are accepted. The model-wide usage must still be below 98%, even
+if a configured tier permits 100%. Caps, rests and model/account restrictions
+still apply. The promoted account competes under Smart's normal rules; it
+does not always go first.
+
+A complete, non-wallet **168-hour** week with a known strictly future reset
+is required. Missing, partial, wallet, nonfinite, expired or unknown-reset
+weekly data cannot earn promotion; neither can another model's week or a
+short/daily/monthly window. After a reset passes, a fresh future reset reading
+is needed. An unknown Automatic account still follows normal quota learning;
+an explicit Backup with unknown quota remains backup.
+
+In the subscription provider editor, add/remove rows and **Save** to set a
+custom list. **Disable promotion**, or removing all rows and saving, stores
+an empty list (`[]`). **Use defaults** restores the server's defaults (null).
+Absent settings use those same defaults without rewriting providers.json.
+This deliberately changes existing users: the old pace >=2% per hour and
+reset-within-24h shortcuts are removed. For example, 10% used with 6 days
+left now qualifies, while 85% used with 20 hours left stays backup. Older
+binaries revert to the old behavior and may drop the setting on save.
+Invalid saved numeric policies earn no promotion until repaired.
 
 With *Stays: Auto*, a conversation already on a backup keeps its warm cache
-under the normal five-minute and 1,024-token rules until it is spent or its
+under the normal cache lifetime (five minutes generally, **one hour for
+ChatGPT accounts**, with the existing vendor and one-hour-write exceptions)
+and 1,024-token rules until it is spent or its
 cache goes cold, even if a primary Standard account resets meanwhile. New
 and cold-cache conversations go to the primary lead. The existing group
 stand-in rules still apply across members. Under *Stays: Session* or
@@ -2191,7 +2220,31 @@ magpie provider account-backup codex
 magpie provider account-backup codex premium@example.com backup
 magpie provider account-backup codex standard@example.com primary
 magpie provider account-backup codex premium@example.com auto
+magpie provider backup-usage-tiers codex
+magpie provider backup-usage-tiers codex '20:7,40:5,60:3,80:1'
+magpie provider backup-usage-tiers codex '15.5:6,55:2.5'
+magpie provider backup-usage-tiers codex off
+magpie provider backup-usage-tiers codex default
 ```
+
+`backup-usage-tiers` shows `default`, `custom` or `off`; pool output shows
+that configured policy too. `backup-5h` and account overrides only control
+which accounts are backups. Key-based providers cannot set promotion tiers.
+`GET /api/providers` exposes saved `backupUsageTiers` and server
+`backupUsageTiersDefault`. To mutate, use the dedicated authenticated
+`POST /api/provider/backupusagetiers` action with
+`{"id":"codex","backupUsageTiers":[{"maxUsed":15.5,"maxResetDays":6}]}`;
+use `[]` for off or null for defaults. Omitting the property or supplying
+invalid rows returns 400 with JSON `error`; general provider Save preserves
+the policy. Each row needs numeric `maxUsed` in [0,100] and `maxResetDays` in
+(0,7], representing at least 1ns. CLI help uses the same inclusive comparisons.
+Local Codex/Claude spare selection consumes this policy with its existing
+model-less quota view; explicit `NextInOrder` rotation is unchanged.
+
+Verification uses isolated provider/CLI tests and direct/group gateway
+requests to local fake vendors. GUI/editor and API handler runtime tests,
+translation/asset checks and sandbox E2E are excluded by AGENTS.md; their
+wiring is reviewed in source.
 
 `account-backup` without an account lists the configured modes; with an
 account alone it shows that account's mode. `auto` removes its override.

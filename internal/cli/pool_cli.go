@@ -212,6 +212,8 @@ func poolOn(l provider.Login) bool {
 func printPool(p provider.Provider, ls []provider.Login) {
 	if len(ls) == 0 {
 		fmt.Println(muted.Render(p.Name + " has no account"))
+		printBackupUsageTiers(p)
+		fmt.Printf("configure weekly promotion · magpie provider backup-usage-tiers %s\n", p.ID)
 		return
 	}
 	uncapped := 0
@@ -253,6 +255,8 @@ func printPool(p provider.Provider, ls []provider.Login) {
 		backup = "on"
 	}
 	fmt.Println("backup without 5h limit ·", backup)
+	printBackupUsageTiers(p)
+	fmt.Printf("configure weekly promotion · magpie provider backup-usage-tiers %s\n", p.ID)
 	fmt.Println("stop at caps ·", stop)
 	fmt.Println("check usage near the cap ·", careful)
 	if uncapped > 0 {
