@@ -91,7 +91,9 @@ function backupUsageTiersEditor(p) {
         input.type = "number"; input.step = "any"; input.min = min; input.max = max;
         input.value = row[key]; input.setAttribute("aria-label", t(label));
         input.oninput = () => { row[key] = input.value; backupTierDrafts.set(p.id, draft); };
-        line.append(el("label", "", t(label), input));
+        const field = el("label", "", t(label));
+        field.append(input);
+        line.append(field);
       }
       const remove = el("button", "text quiet", t("Remove"));
       remove.type = "button";
