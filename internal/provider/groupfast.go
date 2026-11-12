@@ -197,6 +197,23 @@ func cleanFast(entries []Entry, g *Group) error {
 	for _, m := range g.Members {
 		members = append(members, key(m))
 	}
+	var ultra []string
+	for _, f := range g.Ultrafast {
+		f = key(f)
+		if !slices.Contains(members, f) || slices.Contains(ultra, f) {
+			continue
+		}
+		model, _ := memberEffortIn(entries, f)
+		if IsGroupRef(model) {
+			return fmt.Errorf("%s is a group: set Ultrafast on its own models", model)
+		}
+		if p, m, ok := resolveIn(entries, model); ok && !canGroupUltra(p, m) {
+			return fmt.Errorf("%s has no Ultrafast mode magpie can ask for", model)
+		}
+		ultra = append(ultra, f)
+	}
+	g.Ultrafast = ultra
+	g.Fast = append(g.Fast, ultra...)
 	var out []string
 	for _, f := range g.Fast {
 		f = key(f)
@@ -216,10 +233,17 @@ func cleanFast(entries []Entry, g *Group) error {
 	return nil
 }
 
+// canGroupUltra permits a ChatGPT group to keep its tier while no account
+// offers it: routing then uses Fast until an eligible account is available.
+func canGroupUltra(p Provider, model string) bool {
+	return CanFast(p, model) && (p.Account != nil && p.Account.Agent == "codex" || CanUltra(p, model))
+}
+
 // SetMemberFast sends the group's member id fast, or not, where it is in
 // the group.
 func (g *Group) SetMemberFast(id string, fast bool) {
 	g.Fast = slices.DeleteFunc(slices.Clone(g.Fast), func(x string) bool { return x == id })
+	g.Ultrafast = slices.DeleteFunc(slices.Clone(g.Ultrafast), func(x string) bool { return x == id })
 	if fast && slices.Contains(g.Members, id) {
 		g.Fast = append(g.Fast, id)
 	}
@@ -245,9 +269,11 @@ func (g *Group) RenameMember(from, to string) {
 	if g.Pick == from {
 		g.Pick = to
 	}
-	for i, f := range g.Fast {
-		if f == from {
-			g.Fast[i] = to
+	for _, list := range [][]string{g.Fast, g.Ultrafast} {
+		for i, f := range list {
+			if f == from {
+				list[i] = to
+			}
 		}
 	}
 	for i, p := range g.Placed {

@@ -149,6 +149,9 @@ func foldRefs(f file, s *settings.Settings) map[string][]string {
 		for _, m := range g.Fast {
 			note(at+"fast", m)
 		}
+		for _, m := range g.Ultrafast {
+			note(at+"ultrafast", m)
+		}
 		for _, m := range g.Off {
 			note(at+"off", m)
 		}
@@ -350,6 +353,7 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 			g.Rules[k].MapUses(ref)
 		}
 		g.Fast = compact(mapEach(g.Fast, ref))
+		g.Ultrafast = compact(mapEach(g.Ultrafast, ref))
 		g.Placed = compact(mapEach(g.Placed, ref))
 		g.Seen = compact(mapEach(g.Seen, ref))
 		g.Off = compact(mapEach(g.Off, ref))

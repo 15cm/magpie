@@ -207,6 +207,11 @@ func importGroup(text string, over bool) (Imported, error) {
 		p, id, ok := resolveIn(entries, model)
 		return ok && !CanFast(p, id)
 	})
+	g.Ultrafast = slices.DeleteFunc(kept(g.Ultrafast), func(f string) bool {
+		model, _ := memberEffortIn(entries, f)
+		p, id, ok := resolveIn(entries, model)
+		return ok && !canGroupUltra(p, id)
+	})
 	g.Weights = renamedWeights(g.Weights, func(m string) string { return here[strings.TrimSpace(m)] })
 	g.EffortMaps = renamedEffortMaps(g.EffortMaps, func(m string) string { return here[strings.TrimSpace(m)] })
 	if g.Routing != Manual && len(g.Off) == len(g.Members) {

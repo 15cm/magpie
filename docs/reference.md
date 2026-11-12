@@ -425,7 +425,9 @@ handed on, and isn't counted as a request. The CSV's last columns are
 `handed_on`, then `tier_asked`, `tier_sent` and `tier_served`: the
 service tier the client asked for (Claude's fast speed reads `fast`), the
 one that try went out at (a fast pick sends `priority`, or `ultrafast`
-where the pick is set to Ultrafast; Ultrafast becomes
+where the pick or group member is set to Ultrafast; groups can set
+`ultrafast` members through `/api/groups/save` or the CLI’s
+`magpie group set <id> ultrafast=<member>`. Ultrafast becomes
 `priority` on an account whose plan doesn't offer it), and the one the
 vendor's reply said it ran at, empty when the reply doesn't say. The
 ChatGPT backend (Codex signed in with ChatGPT) says `auto` and `default`

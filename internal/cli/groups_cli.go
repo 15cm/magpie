@@ -39,6 +39,7 @@ const groupUsage = `usage:
                                           counting; empty is the 0.4 groups have always asked),
                                           pick=<model> (routing=manual, every request to that one of its models),
                                           fast=<m1>[,m2…] (the models sent in their vendor's fast mode; empty for none),
+                                          ultrafast=<m1>[,m2…] (Ultrafast where offered, Fast otherwise; empty for none),
                                           weight=<m1>=<n>[,m2=<n>…] (each model's share under routing=weight,
                                           1 to 1000; a model not named keeps its own, 1 by default; empty for all 1),
                                           listed=no (its models leave the lists agents see, offered through the
@@ -429,6 +430,7 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 			g.Members, err = members(v)
 			g.Match, g.Matched = patterns, nil
 			g.Fast = nil // the list as typed: :fast on those sent fast
+			g.Ultrafast = nil
 		case "models+", "members+", "model+":
 			var add []string
 			if add, err = members(v); err == nil {
@@ -542,10 +544,20 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 				break
 			}
 			g.IntentSure = &sure
+		case "ultrafast":
+			g.Ultrafast = nil
+			for _, m := range splitIDs(v, inGroup(g.Members)) {
+				id, perr := pickMember(g.Members, m)
+				if perr != nil {
+					return perr
+				}
+				g.Ultrafast = append(g.Ultrafast, id)
+			}
 		case "fast":
 			// the members sent in their vendor's fast mode, as they are in
 			// the group
 			g.Fast = nil
+			g.Ultrafast = nil
 			for _, m := range splitIDs(v, inGroup(g.Members)) {
 				m, _ = provider.MemberFast(m)
 				id, perr := pickMember(g.Members, m)
@@ -1192,7 +1204,9 @@ func showGroup(g provider.Group) error {
 			line = green.Render(fmt.Sprintf("%d %s ●", i+1, typedMember(g, id)))
 		}
 		if l, ok := memberLabel(id, names); ok {
-			if g.IsFast(id) {
+			if slices.Contains(g.Ultrafast, id) {
+				l += " · ultrafast"
+			} else if g.IsFast(id) {
 				l += " · fast"
 			}
 			if g.Routing == provider.Weighted {

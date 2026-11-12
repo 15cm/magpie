@@ -137,8 +137,10 @@ func mapModelRefs(f *file, to func(string) string) {
 		for k := range g.Rules {
 			g.Rules[k].MapUses(to)
 		}
-		for k, m := range g.Fast {
-			g.Fast[k] = to(m)
+		for _, list := range [][]string{g.Fast, g.Ultrafast} {
+			for k, m := range list {
+				list[k] = to(m)
+			}
 		}
 		for k, m := range g.Placed {
 			g.Placed[k] = to(m)

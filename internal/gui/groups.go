@@ -129,8 +129,10 @@ type memberJSON struct {
 	Effort string `json:"effort,omitempty"`
 	// Fast: the group sends it in its vendor's fast mode; CanFast: its
 	// model has one (provider.CanFast)
-	Fast    bool `json:"fast,omitempty"`
-	CanFast bool `json:"canFast,omitempty"`
+	Fast      bool `json:"fast,omitempty"`
+	Ultrafast bool `json:"ultrafast,omitempty"`
+	CanUltra  bool `json:"canUltra,omitempty"`
+	CanFast   bool `json:"canFast,omitempty"`
 	// OwnFast: that fast mode is asked of a provider the user added by its
 	// address, which may or may not serve it (provider.OwnFast, #1615)
 	OwnFast bool `json:"ownFast,omitempty"`
@@ -167,7 +169,8 @@ type modelRef struct {
 	Efforts []string `json:"efforts,omitempty"`
 	// CanFast: a group's member of it may be sent in its vendor's fast
 	// mode (provider.CanFast)
-	CanFast bool `json:"canFast,omitempty"`
+	CanFast  bool `json:"canFast,omitempty"`
+	CanUltra bool `json:"canUltra,omitempty"`
 	// OwnFast: asked of a provider the user added by its address, which may
 	// or may not serve it (provider.OwnFast, #1615)
 	OwnFast bool `json:"ownFast,omitempty"`
@@ -325,12 +328,15 @@ func groupsState() groupsJSON {
 	}
 	out.Accounts = groupAccounts(all)
 	served := provider.Served()
+	ultra := provider.UltraModels()
 	chat := map[string]bool{}
 	set := settings.Shared() // the prices the user set, for each model's free tag
 	for _, e := range served {
 		if e.Group == "" {
 			chat[e.ID] = true
-			out.Models = append(out.Models, servedRef(e, set))
+			ref := servedRef(e, set)
+			ref.CanUltra = provider.UltraOn(e.Provider, e.Model, ultra)
+			out.Models = append(out.Models, ref)
 		}
 	}
 	// the image models, as Settings › Images lists them: each provider's
@@ -416,6 +422,8 @@ func groupsState() groupsJSON {
 				m.CanFast = provider.CanFast(p, model)
 				m.OwnFast = m.CanFast && provider.OwnFast(p, model)
 				m.Fast = m.CanFast && g.IsFast(id)
+				m.CanUltra = provider.UltraOn(p, model, ultra)
+				m.Ultrafast = slices.Contains(g.Ultrafast, id)
 				m.Free = p.FreeModel(model)
 				for _, e := range served {
 					if e.Group == "" && e.Provider.ID == p.ID && e.Model == model {
